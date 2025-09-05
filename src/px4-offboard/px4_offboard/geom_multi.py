@@ -34,9 +34,9 @@ class MultiGeomNode(Node):
 
         ## QoS setup ##
         self.qos_profile = QoSProfile(
-            reliability=QoSReliabilityPolicy.RMW_QOS_POLICY_RELIABILITY_BEST_EFFORT,
-            durability=QoSDurabilityPolicy.RMW_QOS_POLICY_DURABILITY_TRANSIENT_LOCAL,
-            history=QoSHistoryPolicy.RMW_QOS_POLICY_HISTORY_KEEP_LAST,
+            reliability=QoSReliabilityPolicy.BEST_EFFORT,
+            durability=QoSDurabilityPolicy.TRANSIENT_LOCAL,
+            history=QoSHistoryPolicy.KEEP_LAST,
             depth=1
         )
 
@@ -152,7 +152,7 @@ class MultiGeomNode(Node):
         )
         self.publisher_vehicle_attitude_setpoint = self.create_publisher(
             VehicleAttitudeSetpoint,
-            f'{self.prefix}/fmu/in/vehicle_attitude_setpoint',
+            f'{self.prefix}/fmu/in/vehicle_attitude_setpoint_v1',
             self.qos_profile
         )
 
@@ -183,7 +183,7 @@ class MultiGeomNode(Node):
 
         self.create_subscription(
             VehicleLocalPosition,
-            f'{self.prefix}/fmu/out/vehicle_local_position',
+            f'{self.prefix}/fmu/out/vehicle_local_position_v1',
             self.vehicle_local_position_callback,
             self.qos_profile
         )

@@ -17,7 +17,7 @@ setup(
     maintainer_email='1444015757@qq.com',
     description='TODO: Package description',
     license='BSD-3-Clause',
-    tests_require=['pytest'],
+    # tests_require=['pytest'],
     entry_points={
         'console_scripts': [
             'tf_convert = px4_tf.tf_convert:main',

@@ -29,7 +29,7 @@ setup(
     maintainer_email='yunchao.li@u.nus.edu',
     description='PX4 Offboard Control Package for Auto-multilift',
     license='BSD-3',
-    tests_require=['pytest'],
+    # tests_require=['pytest'],
     entry_points={
         'console_scripts': [
                 'visualizer = px4_offboard.visualizer:main',

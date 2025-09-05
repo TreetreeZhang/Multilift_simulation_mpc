@@ -358,9 +358,9 @@ class QuadNode(Node):
     def _initialize_qos(self):
         """Initialize QoS settings for the node."""
         self.qos_profile = QoSProfile(
-            reliability=QoSReliabilityPolicy.RMW_QOS_POLICY_RELIABILITY_BEST_EFFORT,
-            durability=QoSDurabilityPolicy.RMW_QOS_POLICY_DURABILITY_TRANSIENT_LOCAL,
-            history=QoSHistoryPolicy.RMW_QOS_POLICY_HISTORY_KEEP_LAST,
+            reliability=QoSReliabilityPolicy.BEST_EFFORT,
+            durability=QoSDurabilityPolicy.TRANSIENT_LOCAL,
+            history=QoSHistoryPolicy.KEEP_LAST,
             depth=1
         )
         self.control_logic_callback_group = MutuallyExclusiveCallbackGroup() 
@@ -402,8 +402,22 @@ class QuadNode(Node):
         sys.modules["NeuralNet"] = neuralnet_module
         spec.loader.exec_module(neuralnet_module)
         # Load the trained neural network model of the drone
-        self.nn_quad = torch.load(os.path.join(self.package_share_directory, "trained data/trained_nn_quad_"+str(self.drone_idx)+".pt"))
-        
+        # self.nn_quad = torch.load(os.path.join(self.package_share_directory, "trained data/trained_nn_quad_"+str(self.drone_idx)+".pt"))
+        ckpt_path = os.path.join(
+            self.package_share_directory,
+            "trained data",
+            f"trained_nn_quad_{self.drone_idx}.pt",
+        )
+        self.nn_quad = torch.load(
+            ckpt_path,
+            map_location="cpu",
+            weights_only=False,  # for torch > 2.6
+        )
+        if hasattr(self.nn_quad, "eval"):
+            self.nn_quad.eval()
+
+
+
     def _initialize_MPC_states(self):
         """Initialize the state of the drone and payload."""
         # # Initialize the payload's state
@@ -554,7 +568,7 @@ class QuadNode(Node):
         )
         self.publisher_vehicle_attitude_setpoint = self.create_publisher(
             VehicleAttitudeSetpoint,
-            f'{self.prefix}/fmu/in/vehicle_attitude_setpoint',
+            f'{self.prefix}/fmu/in/vehicle_attitude_setpoint_v1',
             self.qos_profile
         )
         self.publisher_vehicle_position_setpoint = self.create_publisher(
@@ -600,7 +614,7 @@ class QuadNode(Node):
         # Local Subscribers to update acceleration
         self.create_subscription(
             VehicleLocalPosition,
-            f'{self.prefix}/fmu/out/vehicle_local_position',
+            f'{self.prefix}/fmu/out/vehicle_local_position_v1',
             self.vehicle_local_position_callback,
             self.qos_profile,
             callback_group=self.state_update_callback_group

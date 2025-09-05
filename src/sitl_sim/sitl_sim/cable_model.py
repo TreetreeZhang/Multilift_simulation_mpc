@@ -7,6 +7,9 @@
 
 from isaacsim import SimulationApp
 # simulation_app = SimulationApp({"headless": False})
+
+from omni.isaac.core.utils.extensions import enable_extension
+enable_extension("omni.physx.demos")
 import math
 from pxr import UsdLux, UsdGeom, Sdf, Gf, UsdPhysics, UsdShade, PhysxSchema, Vt
 import omni.physxdemos as demo
@@ -206,7 +209,7 @@ class RigidBodyRopes(demo.Base):
             physx_limit_api.CreateStiffnessAttr(self._slide_stiffness_limit)
             physx_limit_api.CreateDampingAttr(self._slide_damping_limit)
             physx_limit_api.CreateRestitutionAttr(1)
-            physx_limit_api.CreateContactDistanceAttr(0.0001)
+            #physx_limit_api.CreateContactDistanceAttr(0.0001)
             driveAPI = UsdPhysics.DriveAPI.Apply(d6Prim, prim)
             driveAPI.CreateTypeAttr("force")
             driveAPI.CreateMaxForceAttr(self._slideMaxforceLimit)

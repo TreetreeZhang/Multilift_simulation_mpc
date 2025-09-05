@@ -191,7 +191,7 @@ class ROSGeomState(Node):
     Subscribes to:
       /payload_odom
       /simulation/position_drone_i  (PoseStamped, i=1..N)
-      {ns}/fmu/out/vehicle_local_position  (VehicleLocalPosition)
+      {ns}/fmu/out/vehicle_local_position_v1  (VehicleLocalPosition)
       {ns}/fmu/out/vehicle_odometry        (VehicleOdometry)
     Publishes nothing. Provides getters for controller use, with
     payload acceleration estimated via finite difference + filtering.
@@ -256,8 +256,8 @@ class ROSGeomState(Node):
 
         # PX4 local-position & odometry per drone
         for idx in range(num_drones):
-            lp_topic   = '/fmu/out/vehicle_local_position' if idx == 0   \
-                         else f'/px4_{idx}/fmu/out/vehicle_local_position'
+            lp_topic   = '/fmu/out/vehicle_local_position_v1' if idx == 0   \
+                         else f'/px4_{idx}/fmu/out/vehicle_local_position_v1'
             odom_topic = '/fmu/out/vehicle_odometry'       if idx == 0   \
                          else f'/px4_{idx}/fmu/out/vehicle_odometry'
 
@@ -398,7 +398,7 @@ class GeomLiftCtrl(Node):
             self.create_publisher(
                 VehicleAttitudeSetpoint,
                 ("" if i == 0 else f"/px4_{i}") 
-                + "/fmu/in/vehicle_attitude_setpoint",
+                + "/fmu/in/vehicle_attitude_setpoint_v1",
                 self.qos_profile,
             )
             for i in range(self.n)

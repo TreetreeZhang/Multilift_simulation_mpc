@@ -71,8 +71,8 @@ class PX4Visualizer(Node):
 
         # Configure subscritpions
         qos_profile = QoSProfile(
-            reliability=QoSReliabilityPolicy.RMW_QOS_POLICY_RELIABILITY_BEST_EFFORT,
-            history=QoSHistoryPolicy.RMW_QOS_POLICY_HISTORY_KEEP_LAST,
+            reliability=QoSReliabilityPolicy.BEST_EFFORT,
+            history=QoSHistoryPolicy.KEEP_LAST,
             depth=1,
         )
 
@@ -84,7 +84,7 @@ class PX4Visualizer(Node):
         )
         self.local_position_sub = self.create_subscription(
             VehicleLocalPosition,
-            "/fmu/out/vehicle_local_position",
+            "/fmu/out/vehicle_local_position_v1",
             self.vehicle_local_position_callback,
             qos_profile,
         )

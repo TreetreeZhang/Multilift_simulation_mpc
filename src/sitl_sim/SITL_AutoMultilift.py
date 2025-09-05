@@ -8,18 +8,19 @@ simulation_app = SimulationApp({"headless": False})
 import math
 import numpy as np
 import omni.timeline
-import omni.physxdemos as demo
+
 from omni.isaac.core.world import World
 from omni.isaac.dynamic_control import _dynamic_control as dc
 from pxr import UsdGeom, Sdf, Gf, UsdPhysics, PhysxSchema, Vt
 from omni.physx import  acquire_physx_interface
 from omni.isaac.core.utils.extensions import enable_extension
 enable_extension("omni.isaac.ros2_bridge") # enable ROS2 bridge extension
-
+enable_extension("omni.physx.demos")
+import omni.physxdemos as demo
 from pegasus.simulator.params import ROBOTS, SIMULATION_ENVIRONMENTS
 from pegasus.simulator.logic.interface.pegasus_interface import PegasusInterface
 from pegasus.simulator.logic.backends.px4_mavlink_backend import PX4MavlinkBackend, PX4MavlinkBackendConfig
-from pegasus.simulator.params import ROBOTS, SIMULATION_ENVIRONMENTS, ROBOTS_CONFIG
+from pegasus.simulator.params import ROBOTS, SIMULATION_ENVIRONMENTS
 from pegasus.simulator.logic.vehicles.multirotor import Multirotor, MultirotorConfig
 from scipy.spatial.transform import Rotation
 
@@ -309,7 +310,7 @@ class RigidBodyRopes(demo.Base):
             physx_limit_api.CreateStiffnessAttr(self._slide_stiffness_limit)  
             physx_limit_api.CreateDampingAttr(self._slide_damping_limit)
             physx_limit_api.CreateRestitutionAttr(1)
-            physx_limit_api.CreateContactDistanceAttr(0.0001)
+            # physx_limit_api.CreateContactDistanceAttr(0.0001)
 
             driveAPI = UsdPhysics.DriveAPI.Apply(d6Prim, prim)
             driveAPI.CreateTypeAttr("force")
@@ -759,9 +760,9 @@ class SpawnerPublisher(Node):
         
         # QoS setup
         self.qos_profile = QoSProfile(
-            reliability=QoSReliabilityPolicy.RMW_QOS_POLICY_RELIABILITY_BEST_EFFORT,
-            durability=QoSDurabilityPolicy.RMW_QOS_POLICY_DURABILITY_TRANSIENT_LOCAL,
-            history=QoSHistoryPolicy.RMW_QOS_POLICY_HISTORY_KEEP_LAST,
+            reliability=QoSReliabilityPolicy.BEST_EFFORT,
+            durability=QoSDurabilityPolicy.TRANSIENT_LOCAL,
+            history=QoSHistoryPolicy.KEEP_LAST,
             depth=1
         )
 

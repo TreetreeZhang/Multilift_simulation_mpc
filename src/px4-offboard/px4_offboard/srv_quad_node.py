@@ -80,44 +80,175 @@ class QuadNode(Node):
             callback_group=self.stm_pre_callback_group
         )
 
+        # FIX: Add predefoned timer to avoid crash
+        self.takeoff_traj_timer = None
+        self.geom_ctrl_timer = None
+        self.qmpc_ctrl_timer = None
+
     # --- State Machine ---
+    # def Qnode_state_machine(self):
+    #     """
+    #     Main state machine to handle drone offboard states:
+    #       ST_INIT       -> Wait a few cycles, then send OFFBOARD + ARM commands
+    #       ST_ARMING     -> Wait until OFFBOARD + ARMED, then start takeoff
+    #       ST_TAKEOFF    -> Takeoff by Geom; switch to MPC trajectory when received MPC_TRAJ=True
+    #       ST_MPC        -> Follow the signals from the CentralNode, check REC_TEMP[i] to start & stop QMPC
+    #       ST_DONE       -> Received MPC_TRAJ=False, maintains or ends operation
+    #     """
+    #     # if self.Qnode_state == self.ST_MPC:
+    #     #     offboard_msg              = OffboardControlMode()
+    #     #     offboard_msg.position     = True
+    #     #     offboard_msg.velocity     = False
+    #     #     offboard_msg.acceleration = False
+    #     #     offboard_msg.attitude     = False
+    #     #     offboard_msg.body_rate    = False
+    #     #     offboard_msg.timestamp    = self.timestamp_us
+    #     #     self.publisher_offboard_mode.publish(offboard_msg)
+    #     # else:
+
+    #     # Always publish OffboardControlMode
+    #     offboard_msg              = OffboardControlMode()
+    #     offboard_msg.position     = False
+    #     offboard_msg.velocity     = False
+    #     offboard_msg.acceleration = False
+    #     offboard_msg.attitude     = True
+    #     offboard_msg.body_rate    = False
+    #     offboard_msg.timestamp    = self.timestamp_us
+    #     self.publisher_offboard_mode.publish(offboard_msg)
+
+
+    #     # 1) ST_INIT: send offboard + arm after a certain number of cycles
+    #     if self.Qnode_state == self.ST_INIT:
+    #         if (self.nav_state != VehicleStatus.NAVIGATION_STATE_OFFBOARD
+    #                 or self.arming_state != VehicleStatus.ARMING_STATE_ARMED) \
+    #                 and self.offboard_count >= 10:
+                
+    #             self.publish_vehicle_command(
+    #                 drone_idx=self.drone_idx,
+    #                 command=VehicleCommand.VEHICLE_CMD_DO_SET_MODE,
+    #                 param1=1.0,  # custom mode
+    #                 param2=6.0,  # offboard
+    #                 timestamp_us=self.timestamp_us
+    #             )
+    #             self.arm(
+    #                 drone_idx=self.drone_idx,
+    #                 timestamp_us=self.timestamp_us
+    #             )
+    #             self.get_logger().info("--- Sent OFFBOARD + ARM command. ---")
+    #             self.Qnode_state = self.ST_ARMING
+
+    #     # 2) ST_ARMING: wait until OFFBOARD + ARMED
+    #     elif self.Qnode_state == self.ST_ARMING:
+    #         if (self.nav_state == VehicleStatus.NAVIGATION_STATE_OFFBOARD
+    #                 and self.arming_state == VehicleStatus.ARMING_STATE_ARMED):
+                
+    #             self.get_logger().info("----- Starting takeoff -----")
+    #             # self.takeoff_traj_timer = self.create_timer(
+    #             #     self.dt_ctrl, 
+    #             #     self.generate_takeoff_trajectory,
+    #             #     callback_group=self.stm_pre_callback_group
+    #             # )
+    #             # # XXX: Cause the timer used before define.
+    #             # self.geom_ctrl_timer = self.create_timer(
+    #             #     self.dt_ctrl, 
+    #             #     self.geom_publish_command,
+    #             #     callback_group=self.control_logic_callback_group
+    #             # )
+    #             # self.Qnode_state = self.ST_TAKEOFF
+    #             if self.takeoff_traj_timer is None:
+    #                 self.takeoff_traj_timer = self.create_timer(
+    #                     self.dt_ctrl,
+    #                     self.generate_takeoff_trajectory,
+    #                     callback_group=self.stm_pre_callback_group
+    #                 )
+    #             if self.geom_ctrl_timer is None:
+    #                 self.geom_ctrl_timer = self.create_timer(
+    #                     self.dt_ctrl,
+    #                     self.geom_publish_command,
+    #                     callback_group=self.control_logic_callback_group
+    #                 )
+    #             self.Qnode_state = self.ST_TAKEOFF
+    #         else:
+    #             self.publish_vehicle_command(
+    #                 drone_idx=self.drone_idx,
+    #                 command=VehicleCommand.VEHICLE_CMD_DO_SET_MODE,
+    #                 param1=1.0,
+    #                 param2=6.0,
+    #                 timestamp_us=self.timestamp_us
+    #             )
+    #             self.arm(
+    #                 drone_idx=self.drone_idx,
+    #                 timestamp_us=self.timestamp_us
+    #             )
+    #             self.get_logger().info("--- Resent OFFBOARD + ARM command. ---")
+
+    #     # 3) ST_TAKEOFF: takeoff by Geom Ctrl; switch to MPC trajectory when received MPC_TRAJ=True
+    #     elif self.Qnode_state == self.ST_TAKEOFF:
+    #         if (self.MPC_TRAJ): 
+    #             # CentralNode start the distributed MPC, quadNode handle it in service callback
+                
+    #             self.get_logger().info("----- Starting MPC trajectory -----")
+    #             # self.takeoff_traj_timer.cancel()
+                
+    #             # # # Transfer to MPC, get control inputs from broadcast 'opt_system'
+    #             # # self.qmpc_ctrl_timer = self.create_timer(
+    #             # #     self.dt_ctrl, 
+    #             # #     self.qmpc_publish_command,
+    #             # #     callback_group=self.stm_pre_callback_group)
+    #             # # self.geom_ctrl_timer.cancel()
+    #             # self.Qnode_state = self.ST_MPC
+    #             # FIX: use try except to avoid crash
+    #             if self.takeoff_traj_timer is not None:
+    #                 try: self.takeoff_traj_timer.cancel()
+    #                 except Exception as e: self.get_logger().warn(f"cancel takeoff_traj_timer failed: {e}")
+    #             self.Qnode_state = self.ST_MPC
+
+    #     # 4) ST_MPC: follow the signals from the CentralNode, check REC_TEMP[i] to start & stop QMPC
+    #     elif self.Qnode_state == self.ST_MPC:
+    #         if not self.MPC_TRAJ:
+    #             self.get_logger().info("----- Stopping the distributed MPC -----")
+    #             self.Qnode_state = self.ST_DONE
+
+    #     # 5) ST_DONE: received MPC_TRAJ=False, maintains or ends operation
+    #     elif self.Qnode_state == self.ST_DONE:
+    #         self.get_logger().info("----- Task finished -----")
+    #         self.timer_QNode.cancel()
+    #         pass
+
+    #     self.offboard_count += 1
     def Qnode_state_machine(self):
         """
         Main state machine to handle drone offboard states:
-          ST_INIT       -> Wait a few cycles, then send OFFBOARD + ARM commands
-          ST_ARMING     -> Wait until OFFBOARD + ARMED, then start takeoff
-          ST_TAKEOFF    -> Takeoff by Geom; switch to MPC trajectory when received MPC_TRAJ=True
-          ST_MPC        -> Follow the signals from the CentralNode, check REC_TEMP[i] to start & stop QMPC
-          ST_DONE       -> Received MPC_TRAJ=False, maintains or ends operation
+        ST_INIT       -> Wait a few cycles, then send OFFBOARD + ARM commands
+        ST_ARMING     -> Wait until OFFBOARD + ARMED, then start takeoff
+        ST_TAKEOFF    -> Takeoff by Geom; switch to MPC trajectory when received MPC_TRAJ=True
+        ST_MPC        -> Follow the signals from the CentralNode, check REC_TEMP[i] to start & stop QMPC
+        ST_DONE       -> Received MPC_TRAJ=False, maintains or ends operation
         """
-        # if self.Qnode_state == self.ST_MPC:
-        #     offboard_msg              = OffboardControlMode()
-        #     offboard_msg.position     = True
-        #     offboard_msg.velocity     = False
-        #     offboard_msg.acceleration = False
-        #     offboard_msg.attitude     = False
-        #     offboard_msg.body_rate    = False
-        #     offboard_msg.timestamp    = self.timestamp_us
-        #     self.publisher_offboard_mode.publish(offboard_msg)
-        # else:
-
-        # Always publish OffboardControlMode
-        offboard_msg              = OffboardControlMode()
-        offboard_msg.position     = False
-        offboard_msg.velocity     = False
-        offboard_msg.acceleration = False
-        offboard_msg.attitude     = True
-        offboard_msg.body_rate    = False
-        offboard_msg.timestamp    = self.timestamp_us
+        # --- OffboardControlMode mirrors the reference node's behavior ---
+        offboard_msg = OffboardControlMode()
+        if self.Qnode_state == self.ST_MPC:
+            # During MPC we drive position setpoints
+            offboard_msg.position     = True
+            offboard_msg.attitude     = False
+            offboard_msg.velocity     = False
+            offboard_msg.acceleration = False
+            offboard_msg.body_rate    = False
+        else:
+            # Otherwise, attitude mode (Geom takeoff/hover etc.)
+            offboard_msg.position     = False
+            offboard_msg.attitude     = True
+            offboard_msg.velocity     = False
+            offboard_msg.acceleration = False
+            offboard_msg.body_rate    = False
+        offboard_msg.timestamp = self.timestamp_us
         self.publisher_offboard_mode.publish(offboard_msg)
-
 
         # 1) ST_INIT: send offboard + arm after a certain number of cycles
         if self.Qnode_state == self.ST_INIT:
             if (self.nav_state != VehicleStatus.NAVIGATION_STATE_OFFBOARD
                     or self.arming_state != VehicleStatus.ARMING_STATE_ARMED) \
                     and self.offboard_count >= 10:
-                
                 self.publish_vehicle_command(
                     drone_idx=self.drone_idx,
                     command=VehicleCommand.VEHICLE_CMD_DO_SET_MODE,
@@ -136,18 +267,19 @@ class QuadNode(Node):
         elif self.Qnode_state == self.ST_ARMING:
             if (self.nav_state == VehicleStatus.NAVIGATION_STATE_OFFBOARD
                     and self.arming_state == VehicleStatus.ARMING_STATE_ARMED):
-                
                 self.get_logger().info("----- Starting takeoff -----")
-                self.takeoff_traj_timer = self.create_timer(
-                    self.dt_ctrl, 
-                    self.generate_takeoff_trajectory,
-                    callback_group=self.stm_pre_callback_group
-                )
-                self.geom_ctrl_timer = self.create_timer(
-                    self.dt_ctrl, 
-                    self.geom_publish_command,
-                    callback_group=self.control_logic_callback_group
-                )
+                if self.takeoff_traj_timer is None:
+                    self.takeoff_traj_timer = self.create_timer(
+                        self.dt_ctrl,
+                        self.generate_takeoff_trajectory,
+                        callback_group=self.stm_pre_callback_group
+                    )
+                if self.geom_ctrl_timer is None:
+                    self.geom_ctrl_timer = self.create_timer(
+                        self.dt_ctrl,
+                        self.geom_publish_command,
+                        callback_group=self.control_logic_callback_group
+                    )
                 self.Qnode_state = self.ST_TAKEOFF
             else:
                 self.publish_vehicle_command(
@@ -163,35 +295,49 @@ class QuadNode(Node):
                 )
                 self.get_logger().info("--- Resent OFFBOARD + ARM command. ---")
 
-        # 3) ST_TAKEOFF: takeoff by Geom Ctrl; switch to MPC trajectory when received MPC_TRAJ=True
+        # 3) ST_TAKEOFF: switch to MPC when CentralNode raises MPC_TRAJ
         elif self.Qnode_state == self.ST_TAKEOFF:
-            if (self.MPC_TRAJ): 
-                # CentralNode start the distributed MPC, quadNode handle it in service callback
-                
+            if self.MPC_TRAJ:
                 self.get_logger().info("----- Starting MPC trajectory -----")
-                self.takeoff_traj_timer.cancel()
-                
-                # # Transfer to MPC, get control inputs from broadcast 'opt_system'
-                # self.qmpc_ctrl_timer = self.create_timer(
-                #     self.dt_ctrl, 
-                #     self.qmpc_publish_command,
-                #     callback_group=self.stm_pre_callback_group)
-                # self.geom_ctrl_timer.cancel()
+                # Stop takeoff & geometric control timers
+                if self.takeoff_traj_timer is not None:
+                    try: self.takeoff_traj_timer.cancel()
+                    except Exception as e: self.get_logger().warn(f"cancel takeoff_traj_timer failed: {e}")
+                if self.geom_ctrl_timer is not None:
+                    try: self.geom_ctrl_timer.cancel()
+                    except Exception as e: self.get_logger().warn(f"cancel geom_ctrl_timer failed: {e}")
+
+                # Start MPC position publisher (mirrors reference behavior)
+                if self.qmpc_ctrl_timer is None:
+                    self.qmpc_ctrl_timer = self.create_timer(
+                        self.dt_ctrl,
+                        self.qmpc_publish_position,
+                        callback_group=self.stm_pre_callback_group
+                    )
+
                 self.Qnode_state = self.ST_MPC
 
-        # 4) ST_MPC: follow the signals from the CentralNode, check REC_TEMP[i] to start & stop QMPC
+        # 4) ST_MPC: follow CentralNode; stop when MPC_TRAJ drops
         elif self.Qnode_state == self.ST_MPC:
             if not self.MPC_TRAJ:
                 self.get_logger().info("----- Stopping the distributed MPC -----")
+                # Stop MPC position publisher
+                if self.qmpc_ctrl_timer is not None:
+                    try: self.qmpc_ctrl_timer.cancel()
+                    except Exception as e: self.get_logger().warn(f"cancel qmpc_ctrl_timer failed: {e}")
+                    finally: self.qmpc_ctrl_timer = None
                 self.Qnode_state = self.ST_DONE
 
-        # 5) ST_DONE: received MPC_TRAJ=False, maintains or ends operation
+        # 5) ST_DONE: task finished, stop the state machine timer
         elif self.Qnode_state == self.ST_DONE:
             self.get_logger().info("----- Task finished -----")
-            self.timer_QNode.cancel()
-            pass
+            try:
+                self.timer_QNode.cancel()
+            except Exception as e:
+                self.get_logger().warn(f"cancel timer_QNode failed: {e}")
 
         self.offboard_count += 1
+
 
     # --- QMPC Forward --- 
     def QuadrotorMPC(self,
@@ -248,7 +394,7 @@ class QuadNode(Node):
         sum_viol_xi  += LA.norm(xi_opt[-1,:]-xi_traj[-1,:])
         viol_xi  = sum_viol_xi/len(xi_opt)
         viol_ui  = sum_viol_ui/len(ui_opt)
-        self.get_logger().info(f"drone_ID: {self.drone_idx}, viol_xi: {viol_xi:.5f}, viol_ui: {viol_ui:.5f}") 
+        # self.get_logger().info(f"drone_ID: {self.drone_idx}, viol_xi: {viol_xi:.5f}, viol_ui: {viol_ui:.5f}") 
         max_viol_i = max(viol_xi, viol_ui)
         # NOTE update the max_viol_i
         # self.max_viol_i = max(self.max_viol_i, max_viol_i)
@@ -370,8 +516,21 @@ class QuadNode(Node):
         spec.loader.exec_module(neuralnet_module)
 
         # Load the trained neural network model of the drone
-        self.nn_quad = torch.load(os.path.join(self.package_share_directory, "trained data/trained_nn_quad_"+str(self.drone_idx)+".pt"))
-        
+        # self.nn_quad = torch.load(os.path.join(self.package_share_directory, "trained data/trained_nn_quad_"+str(self.drone_idx)+".pt"))
+        ckpt_path = os.path.join(
+            self.package_share_directory,
+            "trained data",
+            f"trained_nn_quad_{self.drone_idx}.pt",
+        )
+        self.nn_quad = torch.load(
+            ckpt_path,
+            map_location="cpu",
+            weights_only=False,  # for torch > 2.6
+        )
+        if hasattr(self.nn_quad, "eval"):
+            self.nn_quad.eval()
+
+
     def _initialize_MPC_states(self):
         """Initialize the state of the drone and payload."""
         # # Initialize the payload's state
@@ -507,7 +666,9 @@ class QuadNode(Node):
         self.QMPC_service = self.create_service(
             SyncMPC,
             f'/quadMPC_{self.drone_idx}_srv',
-            self.qmpc_srv_callback
+            self.qmpc_srv_callback,
+            # FIX: Add callback group to avoid deadlock
+            callback_group=self.control_logic_callback_group
         )
     
     def _initialize_clients(self):
@@ -889,7 +1050,7 @@ class QuadNode(Node):
         norm_thrust = max(0.0, min(norm_thrust, 1.0))
         msg.thrust_body = [0.0, 0.0, -norm_thrust]
 
-        self.get_logger().info(f"drone_ID: {self.drone_idx}, thrust:{-self.ui_ctrl[0,0]:.2f}, norm_thrust:{-norm_thrust:.2f}, q_d:{q_d.tolist()}")
+        # self.get_logger().info(f"drone_ID: {self.drone_idx}, thrust:{-self.ui_ctrl[0,0]:.2f}, norm_thrust:{-norm_thrust:.2f}, q_d:{q_d.tolist()}")
         
         # 3. Publish the VehicleAttitudeSetpoint msg
         self.publisher_vehicle_attitude_setpoint.publish(msg)
@@ -1013,7 +1174,7 @@ class QuadNode(Node):
         norm_thrust = f_total / self.max_thrust_newtons + 0.25
         norm_thrust = max(0.0, min(norm_thrust, 1.0))
         msg.thrust_body = [0.0, 0.0, -norm_thrust]
-        self.get_logger().info(f"drone_ID: {self.drone_idx}, thrust:{-f_total:.2f}, norm_thrust:{-norm_thrust:.2f}, q_d:{R_to_q(Rd)}")
+        # self.get_logger().info(f"drone_ID: {self.drone_idx}, thrust:{-f_total:.2f}, norm_thrust:{-norm_thrust:.2f}, q_d:{R_to_q(Rd)}")
         # self.get_logger().info(f"thrust:{-norm_thrust:.2f}, q_d:{R_to_q(Rd)}")
         self.publisher_vehicle_attitude_setpoint.publish(msg)
 
@@ -1027,11 +1188,14 @@ class QuadNode(Node):
         msg.param1 = param1
         msg.param2 = param2
         msg.command = command
-        msg.target_system = drone_idx + 1
-        msg.target_component = 1
+        # msg.target_system = drone_idx + 1
+        # msg.target_component = 1
+        # msg.from_external = True
+        msg.target_system   = 0   # broadcast so PX4 will accept regardless of SYSID_THISMAV
+        msg.target_component = 0
+        msg.from_external   = True
         msg.source_system = drone_idx + 1
         msg.source_component = 1
-        msg.from_external = True
         msg.timestamp = timestamp_us
         self.publisher_vehicle_command.publish(msg)
 
@@ -1069,15 +1233,28 @@ class QuadNode(Node):
 
         # CentralNode finishes the current while loop, thus each drone can update its local variables
         if (request.update_ctrl):
-            # -- BUG Update the local MPC control variables FROM the CentralNode --
-            self.ui_ctrl = self.uq_traj[self.drone_idx][0,:].reshape((self.nui,1)) # opt control -> thrust
-            self.xi_ctrl = self.xq_traj[self.drone_idx][0,:].reshape((self.nxi,1)) # opt state -> quaternion
+            # # -- BUG Update the local MPC control variables FROM the CentralNode --
+            # self.ui_ctrl = self.uq_traj[self.drone_idx][0,:].reshape((self.nui,1)) # opt control -> thrust
+            # self.xi_ctrl = self.xq_traj[self.drone_idx][0,:].reshape((self.nxi,1)) # opt state -> quaternion
             
-            # Cancel the Geometric control timer, transfer to the MPC control
-            if not self.transfer_ctrl_flag:
-                self.geom_ctrl_timer.cancel()
-                self.transfer_ctrl_flag = True
+            # # Cancel the Geometric control timer, transfer to the MPC control
+            # if not self.transfer_ctrl_flag:
+            #     self.geom_ctrl_timer.cancel()
+            #     self.transfer_ctrl_flag = True
+            # FIX:
+            if self.Qnode_state < self.ST_TAKEOFF:
+                self.get_logger().warn("update_ctrl before takeoff ready; skip this tick.")
+                response.idx = self.drone_idx
+                response.xi_temp = self.xi_temp.astype(np.float32).flatten().tolist()
+                response.ui_temp = self.ui_temp.astype(np.float32).flatten().tolist()
+                response.max_viol_i = getattr(self, "max_viol_i", 0.0)
+                return response
 
+            timer = getattr(self, "geom_ctrl_timer", None)
+            if timer is not None and not self.transfer_ctrl_flag:
+                try: timer.cancel()
+                except Exception as e: self.get_logger().warn(f"cancel geom_ctrl_timer failed: {e}")
+            self.transfer_ctrl_flag = True
             # self.qmpc_publish_position() # TrajectorySetpoint msg (position setpoint)
             self.qmpc_publish_command() # VehicleAttitudeSetpoint msg (thrust + attitude setpoint)
 
@@ -1133,12 +1310,19 @@ class QuadNode(Node):
 
         # 2. Solve the Quadrotor MPC 
         if (self.MPC_TRAJ and not self.REC_TEMP_i):
+            # FIX
+            if self.Qnode_state < self.ST_TAKEOFF:
+                response.idx = self.drone_idx
+                response.xi_temp = self.xi_temp.astype(np.float32).flatten().tolist()
+                response.ui_temp = self.ui_temp.astype(np.float32).flatten().tolist()
+                response.max_viol_i = 0.0
+                return response
             self.qmpc_start_time = TM.time()
             self.max_viol_i = 0.0 # reset the max_viol_i for each iteration
 
             # Get the nn output based on the REAL-TIME quadrotor's state
             track_e_i   = self.xi[0:6,0]-self.Ref0_xq[self.drone_idx][0:6,0] 
-            self.get_logger().info(f"drone_ID: {self.drone_idx}, track_e_i: {track_e_i}")
+            # self.get_logger().info(f"drone_ID: {self.drone_idx}, track_e_i: {track_e_i}")
             input_i     = np.reshape(track_e_i,(self.Di_in,1))
             nn_i_output = self.convert_quadrotor_nn(self.nn_quad(input_i))
             weight_i    = self.SetPara_quadrotor(nn_i_output)

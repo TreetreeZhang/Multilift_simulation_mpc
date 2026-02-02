@@ -16,6 +16,8 @@ setup(
         ('share/' + package_name, ['package.xml']),
         (os.path.join('share', package_name, 'Reference_traj_fig8'),
          glob('px4_offboard/Reference_traj_fig8/*')),
+        (os.path.join('share', package_name, 'trained data (3quad_backup_best_learned_19)'),
+         glob('px4_offboard/trained data (3quad_backup_best_learned_19)/*')),
         (os.path.join('share', package_name, 'trained data'),
          glob('px4_offboard/trained data/*')),
         (os.path.join('share', package_name), glob('px4_offboard/NeuralNet.py')),

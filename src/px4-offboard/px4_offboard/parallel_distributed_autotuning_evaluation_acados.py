@@ -746,12 +746,12 @@ def Evaluate(shared_mem_name, pool=None):
     # Load the quadrotors' network models
     NN_Quad    = []
     for i in range(nq):
-        PATH_1 = "trained data/trained_nn_quad_"+str(i)+".pt"
+        PATH_1 = "trained data (3quad_backup_best_learned_19)/trained_nn_quad_"+str(i)+".pt"
         # PATH_1 = os.path.join(package_share_directory, "trained data/trained_nn_quad_"+str(i)+".pt")
         nn_quad_i = torch.load(PATH_1)
         NN_Quad  += [nn_quad_i]
     # Load the payload's network model
-    PATHl_2 = "trained data/trained_nn_load.pt"
+    PATHl_2 = "trained data (3quad_backup_best_learned_19)/trained_nn_load.pt"
     # PATHl_2 = os.path.join(package_share_directory, "trained data/trained_nn_load.pt")
     nn_load    = torch.load(PATHl_2)
     

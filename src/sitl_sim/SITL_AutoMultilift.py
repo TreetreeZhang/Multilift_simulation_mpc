@@ -28,6 +28,7 @@ import rclpy
 from rclpy.node import Node
 from rclpy.qos import QoSProfile, QoSReliabilityPolicy, QoSHistoryPolicy, QoSDurabilityPolicy
 from geometry_msgs.msg import PoseStamped, TwistStamped
+from time import sleep
 
 
 class PegasusApp:
@@ -70,15 +71,16 @@ class PegasusApp:
         # Auxiliar variable for the timeline callback example
         self.stop_sim = False
         self.timeline.play()
+        timestamp = 0
 
         # The "infinite" loop
         while simulation_app.is_running() and not self.stop_sim:
-            
+            timestamp += 1
             # run the ros2 node, non-blocking
             rclpy.spin_once(node)
-
-            # Update the UI of the app and perform the physics step
-            self.world.step(render=True)
+            if timestamp % 5 == 0:
+                # Update the UI of the app and perform the physics step
+                self.world.step(render=True)
         
         # Cleanup and stop
         carb.log_warn("PegasusApp Simulation App is closing.")
@@ -738,7 +740,7 @@ class RigidBodyRopes(demo.Base):
 
 
 class SpawnerPublisher(Node):
-    def __init__(self, pg_app, payload_path, num_drones, dt_pub=2e-2):
+    def __init__(self, pg_app, payload_path, num_drones, dt_pub=1e-2):
         super().__init__('payload_quadrotors_state_publisher')
 
         self.world = pg_app.world
@@ -1082,7 +1084,8 @@ def spawn_model(pg_app,
             "px4_autolaunch": True,
             "px4_dir": pg_app.pg.px4_path,
             # "px4_vehicle_model": "iris" # CHANGE this line to 'iris' if using PX4 version bellow v1.14
-            "px4_vehicle_model": "none_iris" # PX4 version v1.14.3    
+            "px4_vehicle_model": "none_iris", # PX4 version v1.14.3    
+            # "enable_lockstep": False,
             })
         config_multirotor.backends = [PX4MavlinkBackend(mavlink_config)]
 
@@ -1124,13 +1127,13 @@ def main(args=None):
     uav_para     = np.array([1.5, 0.02912, 0.02912, 0.05522, 3.0, 0.2]) # L quadrotors XXX
     load_para    = np.array([3.0, 1.0]) # 2.5 kg for 3 quadrotors, 7.5 kg for 6 quadrotors
     cable_para   = np.array([1e9, 8e-6, 1e-2, 2.0]) # E=1 Gpa, A=7mm^2 (pi*1.5^2), c=10, L0=2, Nylon-HD, [5], np.array([5e3, 1e-2, 2])
-    Jl           = 0.5*np.array([[2.0, 2.0, 2.5]]).T # payload's moment of inertia, 0.5*Jl for 3 quadrotors, Jl for 6 quadrotors
+    Jl           = 0.5*0.7*np.array([[2.0, 2.0, 2.5]]).T # payload's moment of inertia, 0.5*Jl for 3 quadrotors, Jl for 6 quadrotors
     rg           = np.array([[0.1, 0.1, -0.1]]).T # coordinate of the payload's CoM in {Bl}
 
     spawn_model(pg_app, uav_para, load_para, cable_para, Jl, rg)
     pg_app.world.reset() # Register the model after spawning
 
-    dt_pub = 2e-2 # 50Hz
+    dt_pub = 1e-2 # 100Hz
     payload_path = "/World/CommonPayload/Payload"
     # payload_path = "/World/quadrotor/body/body"
     node = SpawnerPublisher(pg_app, payload_path, int(uav_para[4]), dt_pub)

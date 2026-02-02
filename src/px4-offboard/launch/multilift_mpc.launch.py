@@ -67,7 +67,7 @@ def generate_launch_description():
                 'uav_para': [1.5, 0.02912, 0.02912, 0.05522, num_drones, 0.2], # Align with the Iris Quadrotor XXX
                 'load_para': [3.0, 1.0], # payload mass, payload radius
                 'cable_para': [1e9, 8e-6, 1e-2, 2.0], # Young's modulus, cross-sectional area, damping coefficient, cable length
-                'Jl': [0.5 * x for x in [2.0, 2.0, 2.5]], # payload inertia, 0.5*Jl for 3 quadrotors, Jl for 6 quadrotors
+                'Jl': [0.5 * 0.7 * x for x in [2.0, 2.0, 2.5]], # payload inertia, 0.5*Jl for 3 quadrotors, Jl for 6 quadrotors
                 'rg': [0.1, 0.1, -0.1], # coordinate of the payload's CoM in {Bl}
                 
                 'dt_ctrl': dt_ctrl,

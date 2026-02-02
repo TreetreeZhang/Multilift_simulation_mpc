@@ -39,7 +39,7 @@ class QuadNode(Node):
         np.set_printoptions(formatter={'float': lambda x: "{0:0.3f}".format(x)}) # show np.array with 3 decimal places
         # Get the package share directory
         self.package_share_directory = ament_index_python.get_package_share_directory('px4_offboard')
-        
+
         ## QoS setup ##
         self._initialize_qos()
 
@@ -200,7 +200,7 @@ class QuadNode(Node):
 
                 # 2. Get the nn output based on the REAL-TIME quadrotor's state
                 track_e_i   = self.xi[0:6,0]-self.Ref0_xq[self.drone_idx][0:6,0] 
-                self.get_logger().info(f"drone_idx: {self.drone_idx}, track_e_i: {track_e_i}")
+                # self.get_logger().info(f"drone_idx: {self.drone_idx}, track_e_i: {track_e_i}")
                 input_i     = np.reshape(track_e_i,(self.Di_in,1))
                 nn_i_output = self.convert_quadrotor_nn(self.nn_quad(input_i))
                 weight_i    = self.SetPara_quadrotor(nn_i_output)
@@ -276,7 +276,7 @@ class QuadNode(Node):
         sum_viol_xi  += LA.norm(xi_opt[-1,:]-xi_traj[-1,:])
         viol_xi  = sum_viol_xi/len(xi_opt)
         viol_ui  = sum_viol_ui/len(ui_opt)
-        self.get_logger().info(f"drone_idx: {self.drone_idx}, viol_xi: {viol_xi}, viol_ui: {viol_ui}") 
+        # self.get_logger().info(f"drone_idx: {self.drone_idx}, viol_xi: {viol_xi}, viol_ui: {viol_ui}") 
         max_viol_i = max(viol_xi, viol_ui)
         # NOTE update the max_viol_i
         self.max_viol_i = max(self.max_viol_i, max_viol_i)
@@ -378,7 +378,7 @@ class QuadNode(Node):
         self.declare_parameter('drone_idx', 0)
         self.declare_parameter('altitude', 5.0) 
         self.declare_parameter('angle_t', np.pi / 9)
-        self.declare_parameter('dt_ctrl', 5e-2)  
+        self.declare_parameter('dt_ctrl', 1e-2)  
         self.declare_parameter('dt_broadcast', 2e-2) 
         self.declare_parameter('init_timestamp', None).value
         self.dt_broadcast = self.get_parameter('dt_broadcast').value
@@ -405,7 +405,7 @@ class QuadNode(Node):
         # self.nn_quad = torch.load(os.path.join(self.package_share_directory, "trained data/trained_nn_quad_"+str(self.drone_idx)+".pt"))
         ckpt_path = os.path.join(
             self.package_share_directory,
-            "trained data",
+            "trained data (3quad_backup_best_learned_19)",
             f"trained_nn_quad_{self.drone_idx}.pt",
         )
         self.nn_quad = torch.load(
@@ -432,7 +432,7 @@ class QuadNode(Node):
         self.vi = np.zeros((3, 1))  # drone velocity
         self.qi = np.array([[1.0], [0.0], [0.0], [0.0]])  # drone quaternion
         self.wi = np.zeros((3, 1))  # drone angular velocity
-        self.xi           = np.vstack((self.pi, self.vi, self.qi, self.wi))
+        self.xi = np.vstack((self.pi, self.vi, self.qi, self.wi))
         self.T_end = self.stm.Tc # Trajectory duration
 
         # L1-AC, initial values used in the low-pass filter
@@ -950,7 +950,7 @@ class QuadNode(Node):
         msg.thrust_body = [0.0, 0.0, -norm_thrust]
 
         # if (self.drone_idx == 0):
-        self.get_logger().info(f"drone_idx: {self.drone_idx}, thrust:{-self.ui_ctrl[0,0]:.2f}, norm_thrust:{-norm_thrust:.2f}, q_d:{q_d.tolist()}")
+        # self.get_logger().info(f"drone_idx: {self.drone_idx}, thrust:{-self.ui_ctrl[0,0]:.2f}, norm_thrust:{-norm_thrust:.2f}, q_d:{q_d.tolist()}")
         # 3. Publish the VehicleAttitudeSetpoint msg
         self.publisher_vehicle_attitude_setpoint.publish(msg)
 
@@ -979,6 +979,7 @@ class QuadNode(Node):
         # self.get_logger().info(f"ctrl msg: {msg}")
 
         # Publish the TrajectorySetpoint msg
+        # XXX: Also published position of each drone!!!!!!!!
         self.publisher_vehicle_position_setpoint.publish(msg)
 
     def geom_publish_command(self):
@@ -1078,7 +1079,7 @@ class QuadNode(Node):
         norm_thrust = f_total / self.max_thrust_newtons + 0.25
         norm_thrust = max(0.0, min(norm_thrust, 1.0))
         msg.thrust_body = [0.0, 0.0, -norm_thrust]
-        self.get_logger().info(f"drone_idx: {self.drone_idx}, thrust:{-f_total:.2f}, norm_thrust:{-norm_thrust:.2f}, q_d:{R_to_q(Rd)}")
+        # self.get_logger().info(f"drone_idx: {self.drone_idx}, thrust:{-f_total:.2f}, norm_thrust:{-norm_thrust:.2f}, q_d:{R_to_q(Rd)}")
         # self.get_logger().info(f"thrust:{-norm_thrust:.2f}, q_d:{R_to_q(Rd)}")
         self.publisher_vehicle_attitude_setpoint.publish(msg)
 
@@ -1205,7 +1206,7 @@ class QuadNode(Node):
         # Final full state vector for the quadrotor
         self.xi = np.vstack((self.pi, self.vi, self.qi, self.wi))
         # if self.drone_idx == 0:
-        self.get_logger().info(f"xi: {self.xi.flatten()}")
+        # self.get_logger().info(f"xi: {self.xi.flatten()}")
 
     def vehicle_local_position_callback(self, msg: VehicleLocalPosition):
         self.a[0] = msg.ax

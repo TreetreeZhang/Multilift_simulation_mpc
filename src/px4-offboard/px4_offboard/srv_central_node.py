@@ -430,9 +430,30 @@ class SyncNode(Node):
         spec.loader.exec_module(neuralnet_module)
 
         # Load the trained neural network model of the drone
-        self.nn_quad = torch.load(os.path.join(self.package_share_directory, "trained data/trained_nn_quad_"+str(self.drone_idx)+".pt"))
+        # self.nn_quad = torch.load(os.path.join(self.package_share_directory, "trained data/trained_nn_quad_"+str(self.drone_idx)+".pt"))
+        quad_ckpt_path = os.path.join(
+            self.package_share_directory,
+            "trained data",
+            f"trained_nn_quad_{self.drone_idx}.pt",
+        )
+        self.nn_quad = torch.load(
+            quad_ckpt_path,
+            map_location="cpu",
+            weights_only=False,  # for torch > 2.6
+        )
         # Load the trained neural network model of the payload
-        self.nn_load = torch.load(os.path.join(self.package_share_directory, "trained data/trained_nn_load.pt"))
+        # self.nn_load = torch.load(os.path.join(self.package_share_directory, "trained data/trained_nn_load.pt"))
+        load_ckpt_path = os.path.join(
+            self.package_share_directory,
+            "trained data",
+            f"trained_nn_load.pt",
+        )
+        self.nn_load = torch.load(
+            load_ckpt_path,
+            map_location="cpu",
+            weights_only=False,  # for torch > 2.6
+        )
+
 
     def _initialize_MPC_states(self):
         """Initialize the state of the drone and payload."""

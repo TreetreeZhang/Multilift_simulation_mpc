@@ -11,9 +11,9 @@ from numpy import linalg as LA
 import math
 from scipy.spatial.transform import Rotation as Rot
 from scipy import linalg as sLA
-from multiprocessing import Pool
-import multiprocessing
-from pathos.multiprocessing import ProcessingPool as Pool
+# from multiprocessing import Pool
+# import multiprocessing
+# from pathos.multiprocessing import ProcessingPool as Pool
 from acados_template import AcadosOcp, AcadosOcpSolver, AcadosModel
 from os import system
 
@@ -154,7 +154,7 @@ class Controller:
         A_s     = np.diag(a_s[0]) # diagonal Hurwitz matrix
         PHI     = LA.inv(A_s)@(sLA.expm(self.dt*A_s)-np.identity(3))
         mu      = sLA.expm(self.dt*A_s)@(z_hat - z)
-        d_hat   = -LA.inv(Bbar)@LA.inv(PHI)@mu
+        d_hat   = -LA.inv(Bbar)@LA.inv(PHI)@mu  # XXX: maybe use solve better
         dm_hat  = np.reshape(d_hat[0,0],(1,1))
         dum_hat = np.reshape(d_hat[1:3,0],(2,1))
         return dm_hat, dum_hat, A_s
@@ -644,6 +644,9 @@ class MPC:
             OCP_q[i].constraints.idxbu = np.array([i for i in range(self.n_ui)])
 
             ##-------set the solver--------##
+            # XXX: may use partial condensing later
+            # OCP_q[i].solver_options.qp_solver = 'PARTIAL_CONDENSING_HPIPM'
+            # Also need to test this method with SQP realtime
             OCP_q[i].solver_options.qp_solver = 'FULL_CONDENSING_QPOASES'
             OCP_q[i].solver_options.hessian_approx = 'GAUSS_NEWTON'
             OCP_q[i].solver_options.regularize_method = 'CONVEXIFY'
@@ -657,6 +660,7 @@ class MPC:
 
             ##-------set the code generation--------##
             # compile acados ocp
+            # XXX: mey need to generate C file for each MPC
             json_file_i = os.path.join('./'+Model_q[i].name+'_acados_ocp.json')
             # load solver from json file
             build_i = True
@@ -856,6 +860,9 @@ class MPC:
         OCP_q.constraints.idxbu = np.array([i for i in range(self.n_ui)])
 
         ##-------set the solver--------##
+        # XXX: may use partial condensing later
+        # OCP_q.solver_options.qp_solver = 'PARTIAL_CONDENSING
+        # Also need to test this method with SQP realtime
         OCP_q.solver_options.qp_solver = 'FULL_CONDENSING_QPOASES'
         OCP_q.solver_options.hessian_approx = 'GAUSS_NEWTON'
         OCP_q.solver_options.regularize_method = 'CONVEXIFY'
@@ -869,6 +876,7 @@ class MPC:
 
         ##-------set the code generation--------##
         # NOTE Multi process should build in different folders!!!
+        # Solved!
         # compile acados ocp
         model_folder_name = f'c_generated_code_q_{index}'
         model_folder_path = os.path.join(os.getcwd(), model_folder_name)
@@ -1225,7 +1233,7 @@ class MPC:
         # load solver from json file
         build_l = True
         generate_l = True
-        if gazebo_sim:
+        if gazebo_sim:      # XXX: may be a small bug for initialize in gazebo
             build_i=False
             generate_i=False
         self.acados_solver_ql = AcadosOcpSolver(ocpl,generate=generate_l,build=build_l,json_file=json_file_l)
@@ -2632,81 +2640,5 @@ class Sensitivity_propagation: # compute the sensitivities (gradients) of the ac
             Xl_pl_t1   = Xl_pl[t+1] # we skip the initial state at t=0, as its gradient w.r.t the weightings is zero!
             dpl       += Dllds@Xl_pl_t1
         return dpl, loss_l
-    
-
-    
-  
-
-            
-    
-    
-    
-
-
-
-
-
-
-
-
-    
-
-    
-    
-
-
-        
-
-
-
-
-            
-
-
-
-
-
-
-
-        
-
-
-
-
-
-
-
-        
-
-
-
-
-
-        
-
-
-
-
-
-
-        
-
-                    
-
-
-
-
-
-
-
-
-
-
-
-
-        
-
-
-
 
     

@@ -232,7 +232,7 @@ class SyncNode(Node):
             input_l      = np.reshape(track_e_l,(self.Dl_in,1))
             nn_l_output  = self.convert_load_nn(self.nn_load(input_l))
             Para_l       = self.SetPara_load(nn_l_output)
-            self.get_logger().info(f"ctrl step={self.k_ctrl}, error_l={track_e_l.flatten()}")
+            # self.get_logger().info(f"ctrl step={self.k_ctrl}, error_l={track_e_l.flatten()}")
             # self.get_logger().info(f"ctrl step={self.k_ctrl}, payload= Ql_k[0:3]={Para_l[0,0:3]}, Ql_k[6:9]={Para_l[0,6:9]}")
             # self.get_logger().info(f"ctrl step={self.k_ctrl}, payload= Ql_N[0:3]={Para_l[0,12:15]}, Rl_k={Para_l[0,2*self.nwsl:]}")
             Para_lh     = np.reshape(Para_l,self.npl) # Weight_l based on real-time state error
@@ -273,7 +273,7 @@ class SyncNode(Node):
             if self.ke>1:
                 # Received max_viol_i from all quadrotors and make comparison before this step
                 self.max_viol = max(self.max_viol, max_viol_l)
-            self.get_logger().info(f"ctrl step={self.k_ctrl}, iteration={self.ke}, max_violation={self.max_viol:.5f}")
+            # self.get_logger().info(f"ctrl step={self.k_ctrl}, iteration={self.ke}, max_violation={self.max_viol:.5f}")
             # update the iteration number
             self.ke += 1
 
@@ -408,7 +408,7 @@ class SyncNode(Node):
         # self.nn_load = torch.load(os.path.join(self.package_share_directory, "trained data/trained_nn_load.pt"))
         ckpt_path = os.path.join(
             self.package_share_directory,
-            "trained data",
+            "trained data (3quad_backup_best_learned_19)",
             "trained_nn_load.pt",
         )
         self.nn_load = torch.load(

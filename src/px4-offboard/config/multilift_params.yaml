@@ -1,0 +1,117 @@
+system:
+  num_drones: 3
+  trajectory_type: fig8
+  auto_generate_trajectories: true
+
+uav:
+  mass: 1.0
+  inertia:
+    Ix: 0.02
+    Iy: 0.02
+    Iz: 0.04
+  wing_length: 0.2
+  num_uavs: 3
+
+payload:
+  mass: 7.5
+  radius: 0.3
+  height: 0.05
+  inertia:
+    Jx: 1.4
+    Jy: 1.4
+    Jz: 1.75
+  center_of_mass:
+    x: 0.1
+    y: 0.1
+    z: -0.1
+
+cable:
+  youngs_modulus: 5000.0
+  cross_section_area: 0.01
+  damping_coefficient: 2.0
+  rest_length: 2.0
+
+control:
+  dt_ctrl: 0.02
+  dt_broadcast: 0.02
+  horizon: 10
+  angle_t: 0.3490658503988659
+
+trajectory:
+  T_total: 20.0
+  dt_ctrl: 0.02
+  nq: 3
+  type: fig8
+
+precomputed_trajectory:
+  data_path: precomputed_trajectories
+  horizon: 10
+  dt_ctrl: 0.02
+  auto_generate: true
+
+parallel_mpc:
+  enabled: true
+  num_workers: 3
+  deadline_ms: 10
+  gamma: 0.01
+  gamma2: 0.001
+  quad_weightings:
+    - 10.0
+    - 10.0
+    - 20.0
+    - 5.0
+    - 5.0
+    - 8.0
+    - 50.0
+    - 50.0
+    - 50.0
+    - 30.0
+    - 30.0
+    - 30.0
+    - 20.0
+    - 20.0
+    - 20.0
+    - 10.0
+    - 10.0
+    - 10.0
+    - 5.0
+    - 5.0
+    - 5.0
+    - 2.0
+    - 2.0
+    - 2.0
+    - 1.0
+    - 1.0
+    - 1.0
+    - 1.0
+  load_weightings:
+    - 10.0
+    - 10.0
+    - 20.0
+    - 5.0
+    - 5.0
+    - 8.0
+    - 50.0
+    - 50.0
+    - 50.0
+    - 30.0
+    - 30.0
+    - 30.0
+    - 20.0
+    - 20.0
+    - 20.0
+    - 10.0
+    - 10.0
+    - 10.0
+    - 5.0
+    - 5.0
+    - 5.0
+    - 2.0
+    - 2.0
+    - 2.0
+    - 1.0
+    - 1.0
+    - 1.0
+    - 1.0
+    - 1.0
+    - 1.0

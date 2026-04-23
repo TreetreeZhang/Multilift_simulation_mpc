@@ -136,7 +136,11 @@ class ParameterManager:
     @staticmethod
     def _default_config_candidates() -> List[Path]:
         current_dir = Path(__file__).parent
-        candidates = [current_dir / "multilift_params.yaml"]
+        package_root = current_dir.parent.parent
+        candidates = [
+            package_root / "config" / "multilift_params.yaml",
+            current_dir / "multilift_params.yaml",
+        ]
 
         if get_package_share_directory is not None:
             try:

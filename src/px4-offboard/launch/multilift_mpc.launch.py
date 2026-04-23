@@ -40,7 +40,7 @@ def generate_launch_description():
     package_dir = get_package_share_directory('px4_offboard')
     nodes = [] 
 
-    dt_ctrl = 5e-2 # 20Hz
+    dt_ctrl = 2e-2 # 50Hz
     dt_broadcast = 1e-2 # 100Hz
     num_drones = 3.0
     takeoff_altitude = 4.0
@@ -74,7 +74,8 @@ def generate_launch_description():
                 'dt_broadcast': dt_broadcast,
                 'angle_t': np.pi / 9,
                 'altitude': takeoff_altitude,
-                'trajectory_type': 'fig8'
+                'trajectory_type': 'fig8',
+                'force_start_mpc': True
             }]
         )
     )
@@ -100,6 +101,8 @@ def generate_launch_description():
                     'angle_t': np.pi / 9,
                     'altitude': takeoff_altitude,
                     'init_timestamp': init_timestamp_us,
+                    'control_output_mode': 'attitude',
+                    'perf_report_window': 100,
                 }]
             )
         )

@@ -27,6 +27,9 @@ from sklearn.metrics import root_mean_squared_error
 from scipy.spatial.transform import Rotation as Rot
 from joblib import Parallel, delayed
 from multiprocessing import Process, Array, Manager, shared_memory
+from PrecomputedTrajectoryManager import PrecomputedTrajectoryManager
+
+_PRECOMP_MANAGER = None
 
 
 print("========================================")
@@ -115,56 +118,20 @@ for k in range(8):
 
 # coeffa = np.load('Reference_traj_circle/coeffa.npy')
 def Reference_for_MPC(time_traj, angle_t):
-    Ref_xq  = [] # quadrotors' state reference trajectories for MPC, ranging from the current k to future k + horizon
-    Ref_uq  = [] # quadrotors' control reference trajectories for MPC, ranging from the current k to future k + horizon
-    Ref_xl  = np.zeros((nxl,horizon+1))
-    Ref_ul  = np.zeros((nul,horizon))
-    Ref0_xq = [] # current quadrotors' reference position and velocity
-    # quadrotor's reference
-    for i in range(nq):
-        Ref_xi  = np.zeros((nxi,horizon+1))
-        Ref_ui  = np.zeros((nui,horizon))
-        for j in range(horizon):
-            ref_p, ref_v, ref_a   = stm.minisnap_quadrotor_fig8(Coeffx, Coeffy, Coeffz,time_traj + j*dt_ctrl, angle_t, i)
-            # ref_p, ref_v, ref_a   = stm.new_circle_quadrotor(coeffa,time_traj + j*dt_ctrl, angle_t, i)
-            # ref_p, ref_v, ref_a   = stm.hovering_quadrotor(angle_t, i)
-            if i==0: # we only need to compute the payload's reference for an arbitrary quadrotor
-                ref_pl, ref_vl, ref_al   = stm.minisnap_load_fig8(Coeffx, Coeffy, Coeffz,time_traj + j*dt_ctrl)
-                # ref_pl, ref_vl, ref_al   = stm.new_circle_load(coeffa,time_traj + j*dt_ctrl)
-                # ref_pl, ref_vl, ref_al   = stm.hovering_load()
-            qd, wd, f_ref, fl_ref, M_ref = GeoCtrl.system_ref(ref_a, load_para[0], ref_al)
-            ref_xi    = np.vstack((ref_p,ref_v,qd,wd))
-            ref_ui    = np.vstack((f_ref,M_ref)) 
-            Ref_xi[:,j:j+1] = ref_xi
-            Ref_ui[:,j:j+1] = ref_ui
-            if i==0:
-                qld       = np.array([[1,0,0,0]]).T # desired quaternion of the payload, representing the identity matrix
-                wld       = np.zeros((3,1)) # deisred angular velocity of the payload
-                ref_xl    = np.vstack((ref_pl, ref_vl, qld, wld))
-                ref_ul    = fl_ref/nul*np.ones((nul,1))
-                Ref_xl[:,j:j+1] = ref_xl
-                Ref_ul[:,j:j+1] = ref_ul
-                if j==0:
-                    Ref0_l   = ref_xl
-            if j == 0:
-                Ref0_xq += [np.vstack((ref_p,ref_v))]
-        ref_p, ref_v, ref_a  = stm.minisnap_quadrotor_fig8(Coeffx, Coeffy, Coeffz,time_traj + horizon*dt_ctrl, angle_t, i)    
-        # ref_p, ref_v, ref_a  = stm.new_circle_quadrotor(coeffa,time_traj + horizon*dt_ctrl, angle_t, i)
-        # ref_p, ref_v, ref_a   = stm.hovering_quadrotor(angle_t, i)
-        if i==0:
-            ref_pl, ref_vl, ref_al   = stm.minisnap_load_fig8(Coeffx, Coeffy, Coeffz,time_traj + horizon*dt_ctrl)
-            # ref_pl, ref_vl, ref_al   = stm.new_circle_load(coeffa,time_traj + horizon*dt_ctrl)
-            # ref_pl, ref_vl, ref_al   = stm.hovering_load()
-        qd, wd, f_ref, fl_ref, M_ref = GeoCtrl.system_ref(ref_a, load_para[0], ref_al)
-        ref_xi    = np.vstack((ref_p,ref_v,qd,wd))
-        Ref_xi[:,horizon:horizon+1] = ref_xi
-        Ref_xq   += [Ref_xi]
-        Ref_uq   += [Ref_ui]
-        if i==0:
-            ref_xl    = np.vstack((ref_pl, ref_vl, qld, wld))
-            Ref_xl[:,horizon:horizon+1] = ref_xl
-        
-    return Ref_xq, Ref_uq, Ref_xl, Ref_ul, Ref0_xq, Ref0_l
+    global _PRECOMP_MANAGER
+    if _PRECOMP_MANAGER is None:
+        _PRECOMP_MANAGER = PrecomputedTrajectoryManager(
+            data_path="precomputed_trajectories",
+            horizon=horizon,
+            dt_ctrl=dt_ctrl,
+            auto_generate=True,
+            uav_para=uav_para,
+            load_para=load_para,
+            cable_para=cable_para,
+            angle_t=angle_t,
+            nq=nq,
+        )
+    return _PRECOMP_MANAGER.get_reference_for_mpc(time_traj, angle_t, nq=nq)
 
 
 """--------------------------------------Define MPC gradient------------------------------------------------"""

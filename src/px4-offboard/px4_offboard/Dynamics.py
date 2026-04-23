@@ -405,31 +405,33 @@ class multilifting:
     
     # polynomial trajectories
     def polytraj(self,coeff,time,time0):
-        time_vec   = vertcat(1,
-                             self.time-self.time0,
-                             (self.time-self.time0)**2,
-                             (self.time-self.time0)**3,
-                             (self.time-self.time0)**4,
-                             (self.time-self.time0)**5,
-                             (self.time-self.time0)**6,
-                             (self.time-self.time0)**7)
-        polyp      = mtimes(self.polyc, time_vec)
-        polyp_fn   = Function('ref_p',[self.polyc,self.time,self.time0],[polyp],['pc0','t0','ti0'],['ref_pf'])
-        ref_p      = polyp_fn(pc0=coeff,t0=time,ti0=time0)['ref_pf'].full()
-        polyv      = jacobian(polyp, self.time)
-        polyv_fn   = Function('ref_v',[self.polyc,self.time,self.time0],[polyv],['pc0','t0','ti0'],['ref_vf'])
-        ref_v      = polyv_fn(pc0=coeff,t0=time,ti0=time0)['ref_vf'].full()
-        polya      = jacobian(polyv, self.time)
-        polya_fn   = Function('ref_a',[self.polyc,self.time,self.time0],[polya],['pc0','t0','ti0'],['ref_af'])
-        ref_a      = polya_fn(pc0=coeff,t0=time,ti0=time0)['ref_af'].full()
-        polyj      = jacobian(polya, self.time)
-        polyj_fn   = Function('ref_j',[self.polyc,self.time,self.time0],[polyj],['pc0','t0','ti0'],['ref_jf'])
-        ref_j      = polyj_fn(pc0=coeff,t0=time,ti0=time0)['ref_jf'].full()
-        polys      = jacobian(polyj, self.time)
-        polys_fn   = Function('ref_s',[self.polyc,self.time,self.time0],[polys],['pc0','t0','ti0'],['ref_sf'])
-        ref_s      = polys_fn(pc0=coeff,t0=time,ti0=time0)['ref_sf'].full()
+        coeff_arr = np.array(coeff, dtype=float).reshape(-1)
+        tau = float(time - time0)
 
-        return ref_p, ref_v, ref_a, ref_j, ref_s
+        ref_p = coeff_arr[0]
+        ref_v = 0.0
+        ref_a = 0.0
+        ref_j = 0.0
+        ref_s = 0.0
+
+        for order, value in enumerate(coeff_arr[1:], start=1):
+            ref_p += value * (tau ** order)
+            if order >= 1:
+                ref_v += order * value * (tau ** (order - 1))
+            if order >= 2:
+                ref_a += order * (order - 1) * value * (tau ** (order - 2))
+            if order >= 3:
+                ref_j += order * (order - 1) * (order - 2) * value * (tau ** (order - 3))
+            if order >= 4:
+                ref_s += order * (order - 1) * (order - 2) * (order - 3) * value * (tau ** (order - 4))
+
+        return (
+            np.array([[ref_p]], dtype=float),
+            np.array([[ref_v]], dtype=float),
+            np.array([[ref_a]], dtype=float),
+            np.array([[ref_j]], dtype=float),
+            np.array([[ref_s]], dtype=float),
+        )
     
     def reference_circle(self, Coeffx_evaluation, Coeffy_evaluation, Coeffz_evaluation, time, t_switch): 
         if time <6.5+t_switch:

@@ -26,6 +26,7 @@ import matplotlib.pyplot as plt
 from px4_offboard import Dynamics
 from px4_offboard import NeuralNet
 from px4_offboard import Robust_Flight_MPC_acados
+from px4_offboard.PrecomputedTrajectoryManager import PrecomputedTrajectoryManager
 from scipy.spatial.transform import Rotation as Rot
 from multiprocessing import Process, Array, Manager
 
@@ -52,6 +53,19 @@ class QuadNode(Node):
         ## Initialize the AutoMultilift system ##
         # HACK Parameters need to adjust according to the settings in Isaac Sim 
         self._initialize_automultilift()
+
+        ## Initialize precomputed trajectory manager ##
+        self.ref_manager = PrecomputedTrajectoryManager(
+            data_path="precomputed_trajectories",
+            horizon=self.horizon,
+            dt_ctrl=self.dt_ctrl,
+            auto_generate=True,
+            uav_para=self.uav_para,
+            load_para=self.load_para,
+            cable_para=self.cable_para,
+            angle_t=self.angle_t,
+            nq=self.nq,
+        )
 
         ## Initialize the neural network ##
         self._initialize_neural_network()
@@ -831,69 +845,7 @@ class QuadNode(Node):
 
     ## --- Ref Trajectory Generation ---
     def Reference_for_MPC(self, time_traj, angle_t):
-        # The input time_traj, angle_t belongs to the class, with self.
-        Ref_xq  = [] # quadrotors' state reference trajectories for MPC, ranging from the current k to future k + horizon
-        Ref_uq  = [] # quadrotors' control reference trajectories for MPC, ranging from the current k to future k + horizon
-        Ref_xl  = np.zeros((self.nxl,self.horizon+1))
-        Ref_ul  = np.zeros((self.nul,self.horizon))
-        Ref0_xq = [] # current quadrotors' reference position and velocity
-
-        # quadrotor's reference
-        for i in range(self.nq):
-            Ref_xi  = np.zeros((self.nxi,self.horizon+1))
-            Ref_ui  = np.zeros((self.nui,self.horizon))
-            # quadrotor's reference in Horizon
-            for j in range(self.horizon):
-                ref_p, ref_v, ref_a   = self.stm.minisnap_quadrotor_fig8(self.Coeffx, self.Coeffy, self.Coeffz,
-                                                                    time_traj + j*self.dt_ctrl, angle_t, i)
-                # ref_p, ref_v, ref_a   = self.stm.new_circle_quadrotor(self.coeffa,time_traj + j*self.dt_ctrl, self.angle_t, i)
-                # ref_p, ref_v, ref_a   = self.stm.hovering_quadrotor(self.angle_t, i)
-
-                if i==0: # we only need to compute the payload's reference for an arbitrary quadrotor
-                    ref_pl, ref_vl, ref_al   = self.stm.minisnap_load_fig8(self.Coeffx, self.Coeffy, self.Coeffz,
-                                                                        time_traj + j*self.dt_ctrl)
-                    # ref_pl, ref_vl, ref_al   = self.stm.new_circle_load(coeffa,time_traj + j*dt_ctrl)
-                    # ref_pl, ref_vl, ref_al   = self.stm.hovering_load()
-
-                qd, wd, f_ref, fl_ref, M_ref = self.GeoCtrl.system_ref(ref_a, self.load_para[0], ref_al)
-                ref_xi    = np.vstack((ref_p,ref_v,qd,wd))
-                ref_ui    = np.vstack((f_ref,M_ref)) 
-                Ref_xi[:,j:j+1] = ref_xi
-                Ref_ui[:,j:j+1] = ref_ui
-
-                if i==0:
-                    qld       = np.array([[1,0,0,0]]).T # desired quaternion of the payload, representing the identity matrix
-                    wld       = np.zeros((3,1)) # deisred angular velocity of the payload
-                    ref_xl    = np.vstack((ref_pl, ref_vl, qld, wld))
-                    ref_ul    = fl_ref/self.nul*np.ones((self.nul,1))
-                    Ref_xl[:,j:j+1] = ref_xl
-                    Ref_ul[:,j:j+1] = ref_ul
-                    if j==0:
-                        Ref0_l   = ref_xl
-                if j == 0:
-                    Ref0_xq += [np.vstack((ref_p,ref_v))]
-
-            # horizon:horizon+1
-            ref_p, ref_v, ref_a  = self.stm.minisnap_quadrotor_fig8(self.Coeffx, self.Coeffy, self.Coeffz,
-                                                                time_traj + self.horizon*self.dt_ctrl, self.angle_t, i)    
-            # ref_p, ref_v, ref_a  = self.stm.new_circle_quadrotor(self.coeffa,time_traj + self.horizon*self.dt_ctrl, self.angle_t, i)
-            # ref_p, ref_v, ref_a   = self.stm.hovering_quadrotor(self.angle_t, i)
-            if i==0:
-                ref_pl, ref_vl, ref_al   = self.stm.minisnap_load_fig8(self.Coeffx, self.Coeffy, self.Coeffz,
-                                                                    time_traj + self.horizon*self.dt_ctrl)
-                # ref_pl, ref_vl, ref_al   = self.stm.new_circle_load(self.coeffa,time_traj + self.horizon*self.dt_ctrl)
-                # ref_pl, ref_vl, ref_al   = self.stm.hovering_load()
-
-            qd, wd, f_ref, fl_ref, M_ref = self.GeoCtrl.system_ref(ref_a, self.load_para[0], ref_al)
-            ref_xi    = np.vstack((ref_p,ref_v,qd,wd))
-            Ref_xi[:,self.horizon:self.horizon+1] = ref_xi
-            Ref_xq   += [Ref_xi]
-            Ref_uq   += [Ref_ui]
-            if i==0:
-                ref_xl    = np.vstack((ref_pl, ref_vl, qld, wld))
-                Ref_xl[:,self.horizon:self.horizon+1] = ref_xl
-            
-        return Ref_xq, Ref_uq, Ref_xl, Ref_ul, Ref0_xq, Ref0_l
+        return self.ref_manager.get_reference_for_mpc(time_traj, angle_t, nq=self.nq)
 
     # --- Geom Trajectory Generation ---
     def generate_takeoff_trajectory(self):

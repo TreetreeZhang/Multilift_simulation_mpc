@@ -6,6 +6,7 @@ from rclpy.callback_groups import ReentrantCallbackGroup, MutuallyExclusiveCallb
 from std_msgs.msg import Int64
 from mpc_msgs.msg import BroadcastMPC, QuadReturnMPC
 from geometry_msgs.msg import PoseStamped, TwistStamped
+from px4_msgs.msg import VehicleOdometry
 from rclpy.qos import QoSProfile, QoSReliabilityPolicy, QoSHistoryPolicy, QoSDurabilityPolicy
 
 # Automultilift imports
@@ -15,6 +16,7 @@ import torch
 import threading
 import time as TM
 import numpy as np
+from collections import deque
 from casadi import *
 import importlib.util
 import ament_index_python
@@ -23,6 +25,10 @@ import matplotlib.pyplot as plt
 from px4_offboard import Dynamics
 from px4_offboard import NeuralNet
 from px4_offboard import Robust_Flight_MPC_acados
+from px4_offboard.matrix_utils import q_multiply
+from px4_offboard.PrecomputedTrajectoryManager import PrecomputedTrajectoryManager
+from px4_offboard.parallel_mpc import ParallelMPCCoordinator
+from px4_offboard.config.parameter_manager import ParameterManager
 from scipy.spatial.transform import Rotation as Rot
 from multiprocessing import Process, Array, Manager
 
@@ -48,11 +54,25 @@ class SyncNode(Node):
         # HACK Parameters need to adjust according to the settings in Isaac Sim 
         self._initialize_automultilift()
 
+        ## Initialize precomputed trajectory manager ##
+        self.ref_manager = PrecomputedTrajectoryManager(
+            data_path="precomputed_trajectories",
+            horizon=self.horizon,
+            dt_ctrl=self.dt_ctrl,
+            auto_generate=True,
+            uav_para=self.uav_para,
+            load_para=self.load_para,
+            cable_para=self.cable_para,
+            angle_t=self.angle_t,
+            nq=self.nq,
+        )
+
         ## Initialize the neural network ##
         self._initialize_neural_network()
 
         ## Initial state variables ##
         self._initialize_MPC_states()
+        self._initialize_parallel_mpc()
 
         ## Initialize the publishers and subscribers ##
         self._initialize_publishers()
@@ -80,7 +100,7 @@ class SyncNode(Node):
         if self.Lnode_state == self.ST_WAIT:
             # self.get_logger().info("----- Waiting for the quadrotors to take off -----")
             # Check if the payload is at the desired altitude
-            if (self.pl[2] >= self.payload_altitude * 0.95 and self.vl[2] < 0.05):
+            if self.force_start_mpc or (self.pl[2] >= 0.8 * 2.0 and abs(self.vl[2]) < 0.5):
                 self.get_logger().info("----- Payload reached the desired altitude -----")
                 # 1. Initialize xq_traj.. to broadcast, use REC_TEMP to start the QMPCs
                 self.mpc_forward_timer = self.create_timer(
@@ -191,14 +211,21 @@ class SyncNode(Node):
             self.xl_traj = xl_traj
             self.ul_traj = ul_traj
 
-            # NOTE 2. Mark the initial start of distributed QMPCs, QNode checks [i]== False to start.
-            self.REC_TEMP = np.zeros((int(self.nq),1),dtype=bool)
+            # NOTE 2. Mark the initial start of distributed QMPCs.
+            if self.parallel_enabled:
+                self.REC_TEMP = np.ones((int(self.nq),1),dtype=bool)
+            else:
+                self.REC_TEMP = np.zeros((int(self.nq),1),dtype=bool)
 
             self.while_flag = True
         # self.get_logger().info(f"Before the while loop, ctrl step={self.k_ctrl}, ke={self.ke}, max_viol={self.max_viol}, REC_TEMP={self.REC_TEMP.flatten()}")
 
-        # 3. Solve the QMPCs, until REC_TEMP[all] == True FIXME
-        while self.max_viol>=epsilon and self.ke<=k_max and np.all(self.REC_TEMP):
+        if self.parallel_enabled:
+            if not self._run_parallel_qmpc():
+                return
+
+        # 3. Solve the QMPCs when all returns are ready
+        if self.max_viol>=epsilon and self.ke<=k_max and np.all(self.REC_TEMP):
             # self.get_logger().info("Enter the while loop")
             if self.ke > 1:
                 self.iter_end = (TM.time() - self.iter_start) * 1000
@@ -278,7 +305,10 @@ class SyncNode(Node):
             self.ke += 1
 
             # 5. Mark the QMPCs to start again
-            self.REC_TEMP = np.zeros((int(self.nq),1),dtype=bool)
+            if self.parallel_enabled:
+                self.REC_TEMP = np.ones((int(self.nq),1),dtype=bool)
+            else:
+                self.REC_TEMP = np.zeros((int(self.nq),1),dtype=bool)
             
             # Check the waiting time for each while iteration
             self.iter_start = TM.time()
@@ -394,6 +424,8 @@ class SyncNode(Node):
         self.altitude = self.get_parameter('altitude').value
         self.declare_parameter('trajectory_type', 'fig8')
         self.trajectory_type = self.get_parameter('trajectory_type').value
+        self.declare_parameter('force_start_mpc', False)
+        self.force_start_mpc = self.get_parameter('force_start_mpc').value
 
     def _initialize_neural_network(self):
         """Initialize the neural network and load the model."""
@@ -450,6 +482,42 @@ class SyncNode(Node):
         self.flag = False # Flag to initialize the trajectory using the reference trajectories
         self.while_flag = False # Flag to check the while loop of SyncNode NOTE
         self.temp_flag = False # Flag to initialize the temp_traj using the reference trajectories
+        self.parallel_cycle_ms = deque(maxlen=5000)
+        self.parallel_cycle_count = 0
+
+    def _initialize_parallel_mpc(self):
+        """Initialize optional shared-memory parallel QMPC execution."""
+        self.parallel_enabled = False
+        self.parallel_qmpc = None
+        self.parallel_status = np.zeros((self.nq,), dtype=np.int32)
+        self.parallel_time_us = np.zeros((self.nq,), dtype=np.int32)
+        self.parallel_states = np.zeros((self.nq, self.nxi), dtype=np.float32)
+        self.parallel_state_ready = np.zeros((self.nq,), dtype=bool)
+
+        self.parallel_ref_translations = np.zeros((self.nq, 3), dtype=np.float32)
+        angle_increment = 2 * math.pi / int(self.nq)
+        for idx in range(self.nq):
+            angle = angle_increment * idx
+            self.parallel_ref_translations[idx] = np.array([
+                (self.load_para[1] + self.cable_para[3] + 0.005) * math.cos(angle),
+                (self.load_para[1] + self.cable_para[3] + 0.005) * math.sin(angle),
+                0.1,
+            ], dtype=np.float32)
+
+        config_path = os.path.join(self.package_share_directory, 'config', 'multilift_params.yaml')
+        if not os.path.exists(config_path):
+            self.get_logger().warning("Parallel MPC config not found; fallback to ROS QMPC.")
+            return
+
+        try:
+            parallel_params = ParameterManager(config_path).params.parallel_mpc
+            if not parallel_params.enabled:
+                return
+            self.parallel_qmpc = ParallelMPCCoordinator(config_path=config_path, num_agents=self.nq)
+            self.parallel_enabled = True
+            self.get_logger().info(f"Parallel MPC enabled for {self.nq} drones.")
+        except Exception as exc:
+            self.get_logger().warning(f"Failed to initialize parallel MPC; fallback to ROS QMPC. error={exc}")
         
     def _initialize_publishers(self):
         """Initialize the publishers for the node."""
@@ -473,6 +541,15 @@ class SyncNode(Node):
 
     def _initialize_subscribers(self):
         """Initialize the subscribers for the node."""
+        for i in range(int(self.uav_para[4])):
+            prefix = '' if i == 0 else f'/px4_{i}'
+            self.create_subscription(
+                VehicleOdometry,
+                f'{prefix}/fmu/out/vehicle_odometry',
+                lambda msg, drone_idx=i: self.parallel_vehicle_odometry_callback(msg, drone_idx),
+                self.qos_profile,
+                callback_group=self.state_update_callback_group
+            )
         # Subscribers to the payload's state (xl, vl, ql, wl) from IsaacSim ros2 node
         self.create_subscription(
             PoseStamped,
@@ -489,14 +566,15 @@ class SyncNode(Node):
             callback_group=self.state_update_callback_group
         )
         # Subscribers to the quadrotor's return temp_traj and max_viol_i
-        for i in range(int(self.uav_para[4])):
-            self.create_subscription(
-                QuadReturnMPC,
-                f'/quad_{i}/QMPC_temp',
-                self.QMPC_temp_callback,
-                self.qos_profile,
-                callback_group=self.return_callback_group
-            )
+        if not self.parallel_enabled:
+            for i in range(int(self.uav_para[4])):
+                self.create_subscription(
+                    QuadReturnMPC,
+                    f'/quad_{i}/QMPC_temp',
+                    self.QMPC_temp_callback,
+                    self.qos_profile,
+                    callback_group=self.return_callback_group
+                )
 
     ## --- Parameterization of the neural network ---
     def SetPara_quadrotor(self, nn_i_output):
@@ -573,69 +651,116 @@ class SyncNode(Node):
 
     ## --- Ref Trajectory Generation ---
     def Reference_for_MPC(self, time_traj, angle_t):
-        # The input time_traj, angle_t belongs to the class, with self.
-        Ref_xq  = [] # quadrotors' state reference trajectories for MPC, ranging from the current k to future k + horizon
-        Ref_uq  = [] # quadrotors' control reference trajectories for MPC, ranging from the current k to future k + horizon
-        Ref_xl  = np.zeros((self.nxl,self.horizon+1))
-        Ref_ul  = np.zeros((self.nul,self.horizon))
-        Ref0_xq = [] # current quadrotors' reference position and velocity
+        return self.ref_manager.get_reference_for_mpc(time_traj, angle_t, nq=self.nq)
 
-        # quadrotor's reference
+    def parallel_vehicle_odometry_callback(self, msg: VehicleOdometry, drone_idx: int):
+        """Track each drone state for central shared-memory QMPC."""
+        ref_translation = self.parallel_ref_translations[drone_idx]
+        ned_position = np.array(msg.position, dtype=np.float32)
+        ned_velocity = np.array(msg.velocity, dtype=np.float32)
+
+        enu_position_local = np.array([ned_position[1], ned_position[0], -ned_position[2]], dtype=np.float32)
+        enu_velocity_local = np.array([ned_velocity[1], ned_velocity[0], -ned_velocity[2]], dtype=np.float32)
+        enu_position_world = enu_position_local + ref_translation
+
+        sqrt2_inv = np.float32(0.70710678118)
+        q_ned_to_enu = np.array([sqrt2_inv, 0.0, 0.0, -sqrt2_inv], dtype=np.float32)
+        q_frd_to_ned = np.array(msg.q, dtype=np.float32)
+        q_frd_to_enu = np.array(q_multiply(q_ned_to_enu, q_frd_to_ned), dtype=np.float32)
+        wi = np.array(msg.angular_velocity, dtype=np.float32)
+
+        self.parallel_states[drone_idx] = np.concatenate((enu_position_world, enu_velocity_local, q_frd_to_enu, wi))
+        self.parallel_state_ready[drone_idx] = True
+
+    def _run_parallel_qmpc(self) -> bool:
+        """Solve all quadrotor MPCs in shared-memory workers for one iteration."""
+        if not self.parallel_enabled or self.parallel_qmpc is None:
+            return False
+
+        if not np.all(self.parallel_state_ready):
+            missing = np.where(~self.parallel_state_ready)[0].tolist()
+            self.get_logger().warning(f"Parallel MPC waiting for drone odometry: {missing}")
+            return False
+
+        iter_xq = np.stack([np.asarray(xq, dtype=np.float32) for xq in self.xq_traj], axis=0)
+        ref_xq = np.stack([np.asarray(ref.T, dtype=np.float32) for ref in self.Ref_xq], axis=0)
+        ref_uq = np.stack([np.asarray(ref.T, dtype=np.float32) for ref in self.Ref_uq], axis=0)
+        iter_xl = np.asarray(self.xl_traj, dtype=np.float32)
+        iter_ul = np.asarray(self.ul_traj, dtype=np.float32)
+
+        try:
+            xq_temp, uq_temp, status, compute_time_us = self.parallel_qmpc.run_one_cycle(
+                states=self.parallel_states,
+                iter_xq=iter_xq,
+                ref_xq=ref_xq,
+                ref_uq=ref_uq,
+                iter_xl=iter_xl,
+                iter_ul=iter_ul,
+            )
+        except Exception as exc:
+            self.get_logger().warning(f"Parallel MPC cycle failed: {exc}")
+            return False
+        self._record_parallel_qmpc_time(compute_time_us)
+
+        self.parallel_status = status
+        self.parallel_time_us = compute_time_us
+        self.xq_traj_temp = [xq_temp[i].copy() for i in range(self.nq)]
+        self.uq_traj_temp = [uq_temp[i].copy() for i in range(self.nq)]
+
+        max_viol = 0.0
         for i in range(self.nq):
-            Ref_xi  = np.zeros((self.nxi,self.horizon+1))
-            Ref_ui  = np.zeros((self.nui,self.horizon))
-            # quadrotor's reference in Horizon
-            for j in range(self.horizon):
-                ref_p, ref_v, ref_a   = self.stm.minisnap_quadrotor_fig8(self.Coeffx, self.Coeffy, self.Coeffz,
-                                                                    time_traj + j*self.dt_ctrl, angle_t, i)
-                # ref_p, ref_v, ref_a   = self.stm.new_circle_quadrotor(self.coeffa,time_traj + j*self.dt_ctrl, self.angle_t, i)
-                # ref_p, ref_v, ref_a   = self.stm.hovering_quadrotor(self.angle_t, i)
+            xi_prev = np.asarray(self.xq_traj[i], dtype=np.float32)
+            ui_prev = np.asarray(self.uq_traj[i], dtype=np.float32)
+            xi_opt = self.xq_traj_temp[i]
+            ui_opt = self.uq_traj_temp[i]
 
-                if i==0: # we only need to compute the payload's reference for an arbitrary quadrotor
-                    ref_pl, ref_vl, ref_al   = self.stm.minisnap_load_fig8(self.Coeffx, self.Coeffy, self.Coeffz,
-                                                                        time_traj + j*self.dt_ctrl)
-                    # ref_pl, ref_vl, ref_al   = self.stm.new_circle_load(coeffa,time_traj + j*dt_ctrl)
-                    # ref_pl, ref_vl, ref_al   = self.stm.hovering_load()
+            sum_viol_xi = 0.0
+            sum_viol_ui = 0.0
+            for ki in range(len(ui_prev)):
+                sum_viol_xi += LA.norm(xi_opt[ki, :] - xi_prev[ki, :])
+                sum_viol_ui += LA.norm(ui_opt[ki, :] - ui_prev[ki, :])
+            sum_viol_xi += LA.norm(xi_opt[-1, :] - xi_prev[-1, :])
 
-                qd, wd, f_ref, fl_ref, M_ref = self.GeoCtrl.system_ref(ref_a, self.load_para[0], ref_al)
-                ref_xi    = np.vstack((ref_p,ref_v,qd,wd))
-                ref_ui    = np.vstack((f_ref,M_ref)) 
-                Ref_xi[:,j:j+1] = ref_xi
-                Ref_ui[:,j:j+1] = ref_ui
+            viol_xi = sum_viol_xi / len(xi_opt)
+            viol_ui = sum_viol_ui / len(ui_opt)
+            max_viol = max(max_viol, max(viol_xi, viol_ui))
 
-                if i==0:
-                    qld       = np.array([[1,0,0,0]]).T # desired quaternion of the payload, representing the identity matrix
-                    wld       = np.zeros((3,1)) # deisred angular velocity of the payload
-                    ref_xl    = np.vstack((ref_pl, ref_vl, qld, wld))
-                    ref_ul    = fl_ref/self.nul*np.ones((self.nul,1))
-                    Ref_xl[:,j:j+1] = ref_xl
-                    Ref_ul[:,j:j+1] = ref_ul
-                    if j==0:
-                        Ref0_l   = ref_xl
-                if j == 0:
-                    Ref0_xq += [np.vstack((ref_p,ref_v))]
+        self.max_viol = max_viol
+        self.REC_TEMP = np.ones((int(self.nq), 1), dtype=bool)
 
-            # horizon:horizon+1
-            ref_p, ref_v, ref_a  = self.stm.minisnap_quadrotor_fig8(self.Coeffx, self.Coeffy, self.Coeffz,
-                                                                time_traj + self.horizon*self.dt_ctrl, self.angle_t, i)    
-            # ref_p, ref_v, ref_a  = self.stm.new_circle_quadrotor(self.coeffa,time_traj + self.horizon*self.dt_ctrl, self.angle_t, i)
-            # ref_p, ref_v, ref_a   = self.stm.hovering_quadrotor(self.angle_t, i)
-            if i==0:
-                ref_pl, ref_vl, ref_al   = self.stm.minisnap_load_fig8(self.Coeffx, self.Coeffy, self.Coeffz,
-                                                                    time_traj + self.horizon*self.dt_ctrl)
-                # ref_pl, ref_vl, ref_al   = self.stm.new_circle_load(self.coeffa,time_traj + self.horizon*self.dt_ctrl)
-                # ref_pl, ref_vl, ref_al   = self.stm.hovering_load()
+        bad_workers = np.where(status != 0)[0]
+        if bad_workers.size > 0:
+            self.get_logger().warning(
+                f"Parallel MPC worker status nonzero: idx={bad_workers.tolist()}, status={status[bad_workers].tolist()}"
+            )
 
-            qd, wd, f_ref, fl_ref, M_ref = self.GeoCtrl.system_ref(ref_a, self.load_para[0], ref_al)
-            ref_xi    = np.vstack((ref_p,ref_v,qd,wd))
-            Ref_xi[:,self.horizon:self.horizon+1] = ref_xi
-            Ref_xq   += [Ref_xi]
-            Ref_uq   += [Ref_ui]
-            if i==0:
-                ref_xl    = np.vstack((ref_pl, ref_vl, qld, wld))
-                Ref_xl[:,self.horizon:self.horizon+1] = ref_xl
-            
-        return Ref_xq, Ref_uq, Ref_xl, Ref_ul, Ref0_xq, Ref0_l
+        return True
+
+    def _record_parallel_qmpc_time(self, compute_time_us: np.ndarray):
+        worker_ms = np.asarray(compute_time_us, dtype=np.float64) / 1000.0
+        cycle_ms = float(np.max(worker_ms)) if worker_ms.size > 0 else 0.0
+        self.parallel_cycle_ms.append(cycle_ms)
+        self.parallel_cycle_count += 1
+
+        if self.parallel_cycle_count % 100 != 0:
+            return
+
+        samples = np.array(self.parallel_cycle_ms, dtype=np.float64)
+        mean_ms = float(np.mean(samples))
+        p95_ms = float(np.percentile(samples, 95))
+        p99_ms = float(np.percentile(samples, 99))
+        max_ms = float(np.max(samples))
+        period_ms = self.dt_ctrl * 1000.0
+        current_hz = 1.0 / self.dt_ctrl
+        ceiling_p95 = 1000.0 / max(p95_ms, 1e-6)
+        ceiling_p99 = 1000.0 / max(p99_ms, 1e-6)
+
+        self.get_logger().info(
+            f"[perf] parallel_qmpc cycle_ms(mean/p95/p99/max)="
+            f"{mean_ms:.2f}/{p95_ms:.2f}/{p99_ms:.2f}/{max_ms:.2f}, "
+            f"current={current_hz:.2f}Hz, est_ceiling(p95/p99)="
+            f"{ceiling_p95:.2f}/{ceiling_p99:.2f}Hz, util_p95={p95_ms / period_ms:.2f}"
+        )
 
     # --- Timer Broadcast Publisher ---
     def sync_timestamp(self):
@@ -670,6 +795,8 @@ class SyncNode(Node):
 
     # --- Subscriber Callback Functions ---
     def QMPC_temp_callback(self, msg: QuadReturnMPC):
+        if self.parallel_enabled:
+            return
         # Receive the temp result from ith QMPC
         quad_idx = msg.idx
         # if self.REC_TEMP[quad_idx] == True:
@@ -706,6 +833,14 @@ class SyncNode(Node):
         # update the payload's state in the system
         self.xl[3:6,0:1] = self.vl
         self.xl[10:13,0:1] = self.wl
+
+    def destroy_node(self):
+        if self.parallel_qmpc is not None:
+            try:
+                self.parallel_qmpc.shutdown()
+            except Exception as exc:
+                self.get_logger().warning(f"Failed to shutdown parallel MPC workers cleanly: {exc}")
+        return super().destroy_node()
 
 
 def main(args=None):

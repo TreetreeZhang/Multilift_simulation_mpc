@@ -4,6 +4,9 @@ import os
 if not os.path.exists("Reference_traj_circle"):
     os.makedirs("Reference_traj_circle")
 
+if not os.path.exists("Reference_traj_fig8"):
+    os.makedirs("Reference_traj_fig8")
+
     
 # quadrotor 0
 # coeffx1  = np.array([[1,	0,	0,	0,	0.0159994512651706,	-0.00312900383912878,	0.000190805145299291,	-3.35519827605777e-06]])

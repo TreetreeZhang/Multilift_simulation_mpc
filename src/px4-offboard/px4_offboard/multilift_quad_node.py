@@ -15,6 +15,7 @@ import math
 import torch
 import time as TM
 import numpy as np
+from collections import deque
 from casadi import *
 import importlib.util
 import ament_index_python
@@ -23,6 +24,7 @@ import matplotlib.pyplot as plt
 from px4_offboard import Dynamics
 from px4_offboard import NeuralNet
 from px4_offboard import Robust_Flight_MPC_acados
+from px4_offboard.PrecomputedTrajectoryManager import PrecomputedTrajectoryManager
 from scipy.spatial.transform import Rotation as Rot
 from multiprocessing import Process, Array, Manager
 
@@ -49,6 +51,19 @@ class QuadNode(Node):
         ## Initialize the AutoMultilift system ##
         # HACK Parameters need to adjust according to the settings in Isaac Sim 
         self._initialize_automultilift()
+
+        ## Initialize precomputed trajectory manager ##
+        self.ref_manager = PrecomputedTrajectoryManager(
+            data_path="precomputed_trajectories",
+            horizon=self.horizon,
+            dt_ctrl=self.dt_ctrl,
+            auto_generate=True,
+            uav_para=self.uav_para,
+            load_para=self.load_para,
+            cable_para=self.cable_para,
+            angle_t=self.angle_t,
+            nq=self.nq,
+        )
 
         ## Initialize the neural network ##
         self._initialize_neural_network()
@@ -85,10 +100,10 @@ class QuadNode(Node):
         if self.Qnode_state == self.ST_TRAJECTORY:
             # Always publish OffboardControlMode
             offboard_msg = OffboardControlMode()
-            offboard_msg.position = True
+            offboard_msg.position = self.control_output_mode == 'position'
             offboard_msg.velocity = False
             offboard_msg.acceleration = False
-            offboard_msg.attitude = False
+            offboard_msg.attitude = self.control_output_mode == 'attitude'
             offboard_msg.body_rate = False
             offboard_msg.timestamp = self.timestamp_us
             self.publisher_offboard_mode.publish(offboard_msg)
@@ -159,9 +174,13 @@ class QuadNode(Node):
                 # HACK
                 # self.qmpc_ctrl_timer = self.create_timer(
                 #     self.dt_ctrl, self.qmpc_publish_command)
+                if self.control_output_mode == 'attitude':
+                    qmpc_ctrl_callback = self.qmpc_publish_command
+                else:
+                    qmpc_ctrl_callback = self.qmpc_publish_position
                 self.qmpc_ctrl_timer = self.create_timer(
-                    self.dt_ctrl, 
-                    self.qmpc_publish_position,
+                    self.dt_ctrl,
+                    qmpc_ctrl_callback,
                     callback_group=self.stm_pre_callback_group)
                 self.geom_ctrl_timer.cancel()
                 # 2. Check and solve QMPC, return the temp_traj to LNode
@@ -209,7 +228,7 @@ class QuadNode(Node):
                 self.QuadrotorMPC(self.xq_traj, self.uq_traj, self.xl_traj, self.ul_traj,
                                 self.Ref_xq[self.drone_idx], self.Ref_uq[self.drone_idx], weight_i, self.drone_idx)
                 qmpctime = (TM.time() - self.start_time)*1000
-                self.get_logger().info(f"drone_idx: {self.drone_idx}, ---qmpc_time: {qmpctime:.2f} ms---")
+                self._record_qmpc_solve_time(qmpctime)
                 # reset the max_viol_i for the next iteration
                 # self.max_viol_i = 0.0 # NOTE different from SyncNode
 
@@ -381,8 +400,13 @@ class QuadNode(Node):
         self.declare_parameter('dt_ctrl', 1e-2)  
         self.declare_parameter('dt_broadcast', 2e-2) 
         self.declare_parameter('init_timestamp', None).value
+        self.declare_parameter('control_output_mode', 'position')
+        self.declare_parameter('perf_report_window', 100)
         self.dt_broadcast = self.get_parameter('dt_broadcast').value
         self.altitude = self.get_parameter('altitude').value
+        requested_mode = str(self.get_parameter('control_output_mode').value).strip().lower()
+        self.control_output_mode = 'attitude' if requested_mode == 'attitude' else 'position'
+        self.perf_report_window = max(10, int(self.get_parameter('perf_report_window').value))
 
         self.drone_idx = self.get_parameter('drone_idx').value
         self.prefix = '' if self.drone_idx == 0 else f'/px4_{self.drone_idx}'
@@ -405,7 +429,7 @@ class QuadNode(Node):
         # self.nn_quad = torch.load(os.path.join(self.package_share_directory, "trained data/trained_nn_quad_"+str(self.drone_idx)+".pt"))
         ckpt_path = os.path.join(
             self.package_share_directory,
-            "trained data (3quad_backup_best_learned_19)",
+            "trained data",
             f"trained_nn_quad_{self.drone_idx}.pt",
         )
         self.nn_quad = torch.load(
@@ -461,6 +485,9 @@ class QuadNode(Node):
         self.solved_flag = False # QMPC solved flag
         self.confirmed_flag = False # QMPC confirmed received flag
         self.start_time = 0.0 # QMPC start time
+        self.mpc_ctrl_ready = False
+        self.qmpc_solve_ms = deque(maxlen=5000)
+        self.qmpc_solve_count = 0
 
         # Add reference frame offset in world ENU
         angle_increment = 2 * math.pi / int(self.uav_para[4])
@@ -710,69 +737,7 @@ class QuadNode(Node):
 
     ## --- Ref Trajectory Generation ---
     def Reference_for_MPC(self, time_traj, angle_t):
-        # The input time_traj, angle_t belongs to the class, with self.
-        Ref_xq  = [] # quadrotors' state reference trajectories for MPC, ranging from the current k to future k + horizon
-        Ref_uq  = [] # quadrotors' control reference trajectories for MPC, ranging from the current k to future k + horizon
-        Ref_xl  = np.zeros((self.nxl,self.horizon+1))
-        Ref_ul  = np.zeros((self.nul,self.horizon))
-        Ref0_xq = [] # current quadrotors' reference position and velocity
-
-        # quadrotor's reference
-        for i in range(self.nq):
-            Ref_xi  = np.zeros((self.nxi,self.horizon+1))
-            Ref_ui  = np.zeros((self.nui,self.horizon))
-            # quadrotor's reference in Horizon
-            for j in range(self.horizon):
-                ref_p, ref_v, ref_a   = self.stm.minisnap_quadrotor_fig8(self.Coeffx, self.Coeffy, self.Coeffz,
-                                                                    time_traj + j*self.dt_ctrl, angle_t, i)
-                # ref_p, ref_v, ref_a   = self.stm.new_circle_quadrotor(self.coeffa,time_traj + j*self.dt_ctrl, self.angle_t, i)
-                # ref_p, ref_v, ref_a   = self.stm.hovering_quadrotor(self.angle_t, i)
-
-                if i==0: # we only need to compute the payload's reference for an arbitrary quadrotor
-                    ref_pl, ref_vl, ref_al   = self.stm.minisnap_load_fig8(self.Coeffx, self.Coeffy, self.Coeffz,
-                                                                        time_traj + j*self.dt_ctrl)
-                    # ref_pl, ref_vl, ref_al   = self.stm.new_circle_load(coeffa,time_traj + j*dt_ctrl)
-                    # ref_pl, ref_vl, ref_al   = self.stm.hovering_load()
-
-                qd, wd, f_ref, fl_ref, M_ref = self.GeoCtrl.system_ref(ref_a, self.load_para[0], ref_al)
-                ref_xi    = np.vstack((ref_p,ref_v,qd,wd))
-                ref_ui    = np.vstack((f_ref,M_ref)) 
-                Ref_xi[:,j:j+1] = ref_xi
-                Ref_ui[:,j:j+1] = ref_ui
-
-                if i==0:
-                    qld       = np.array([[1,0,0,0]]).T # desired quaternion of the payload, representing the identity matrix
-                    wld       = np.zeros((3,1)) # deisred angular velocity of the payload
-                    ref_xl    = np.vstack((ref_pl, ref_vl, qld, wld))
-                    ref_ul    = fl_ref/self.nul*np.ones((self.nul,1))
-                    Ref_xl[:,j:j+1] = ref_xl
-                    Ref_ul[:,j:j+1] = ref_ul
-                    if j==0:
-                        Ref0_l   = ref_xl
-                if j == 0:
-                    Ref0_xq += [np.vstack((ref_p,ref_v))]
-
-            # horizon:horizon+1
-            ref_p, ref_v, ref_a  = self.stm.minisnap_quadrotor_fig8(self.Coeffx, self.Coeffy, self.Coeffz,
-                                                                time_traj + self.horizon*self.dt_ctrl, self.angle_t, i)    
-            # ref_p, ref_v, ref_a  = self.stm.new_circle_quadrotor(self.coeffa,time_traj + self.horizon*self.dt_ctrl, self.angle_t, i)
-            # ref_p, ref_v, ref_a   = self.stm.hovering_quadrotor(self.angle_t, i)
-            if i==0:
-                ref_pl, ref_vl, ref_al   = self.stm.minisnap_load_fig8(self.Coeffx, self.Coeffy, self.Coeffz,
-                                                                    time_traj + self.horizon*self.dt_ctrl)
-                # ref_pl, ref_vl, ref_al   = self.stm.new_circle_load(self.coeffa,time_traj + self.horizon*self.dt_ctrl)
-                # ref_pl, ref_vl, ref_al   = self.stm.hovering_load()
-
-            qd, wd, f_ref, fl_ref, M_ref = self.GeoCtrl.system_ref(ref_a, self.load_para[0], ref_al)
-            ref_xi    = np.vstack((ref_p,ref_v,qd,wd))
-            Ref_xi[:,self.horizon:self.horizon+1] = ref_xi
-            Ref_xq   += [Ref_xi]
-            Ref_uq   += [Ref_ui]
-            if i==0:
-                ref_xl    = np.vstack((ref_pl, ref_vl, qld, wld))
-                Ref_xl[:,self.horizon:self.horizon+1] = ref_xl
-            
-        return Ref_xq, Ref_uq, Ref_xl, Ref_ul, Ref0_xq, Ref0_l
+        return self.ref_manager.get_reference_for_mpc(time_traj, angle_t, nq=self.nq)
 
     # --- Geom Trajectory Generation ---
     def generate_takeoff_trajectory(self):
@@ -928,24 +893,32 @@ class QuadNode(Node):
         # z_hatnew = self.stm.predictor_L1(z_hat, xi, ui, self.xl, ti, dm_hat, dum_hat, A_s, self.drone_idx, self.dt_ctrl)
         # self.z_hat = z_hatnew
 
-        # FIXME
-        # 2. Use the current xi_ctrl, ui_ctrl (update from LNode) to apply Attitude setpoint and thrust control
+        if not self.mpc_ctrl_ready:
+            self._publish_safe_attitude_setpoint("waiting for first MPC control")
+            return
+
         msg = VehicleAttitudeSetpoint()
         msg.timestamp = self.timestamp_us
 
         q_frd_to_enu_d = self.xi_ctrl[6:10, 0]
         q_norm = np.linalg.norm(q_frd_to_enu_d)
-        if q_norm < 1e-6:
-            q_d = np.array([1.0, 0.0, 0.0, 0.0])  # fallback
-        else:
-            q_d = q_frd_to_enu_d / q_norm
+        if not np.isfinite(q_norm) or q_norm < 1e-6:
+            self._publish_safe_attitude_setpoint("invalid MPC quaternion")
+            return
+        q_d = q_frd_to_enu_d / q_norm
 
-        q_enu_to_ned = [0.7071, 0, 0, 0.7071]
-        q_frd_to_ned_d = q_multiply(q_enu_to_ned, q_d)
+        q_enu_to_ned = np.array([0.7071, 0, 0, 0.7071])
+        q_frd_to_ned_d = np.array(q_multiply(q_enu_to_ned, q_d), dtype=np.float64)
+        if not self._attitude_setpoint_is_safe(q_frd_to_ned_d):
+            self._publish_safe_attitude_setpoint("unsafe MPC attitude")
+            return
         msg.q_d = q_frd_to_ned_d.tolist()  # desired quaternion
 
-        # self.ui_ctrl[0,0] -= 5
-        norm_thrust = self.ui_ctrl[0,0] / self.max_thrust_newtons
+        thrust_newtons = float(self.ui_ctrl[0, 0])
+        if not np.isfinite(thrust_newtons) or thrust_newtons <= 0.0:
+            self._publish_safe_attitude_setpoint("invalid MPC thrust")
+            return
+        norm_thrust = thrust_newtons / self.max_thrust_newtons
         norm_thrust = max(0.0, min(norm_thrust, 1.0))
         msg.thrust_body = [0.0, 0.0, -norm_thrust]
 
@@ -953,6 +926,67 @@ class QuadNode(Node):
         # self.get_logger().info(f"drone_idx: {self.drone_idx}, thrust:{-self.ui_ctrl[0,0]:.2f}, norm_thrust:{-norm_thrust:.2f}, q_d:{q_d.tolist()}")
         # 3. Publish the VehicleAttitudeSetpoint msg
         self.publisher_vehicle_attitude_setpoint.publish(msg)
+
+    def _attitude_setpoint_is_safe(self, q_wxyz):
+        q_norm = np.linalg.norm(q_wxyz)
+        if not np.isfinite(q_norm) or q_norm < 1e-6:
+            return False
+        q = q_wxyz / q_norm
+        try:
+            roll, pitch, _ = Rot.from_quat([q[1], q[2], q[3], q[0]]).as_euler('xyz')
+        except ValueError:
+            return False
+        max_tilt_rad = math.radians(55.0)
+        return abs(roll) <= max_tilt_rad and abs(pitch) <= max_tilt_rad
+
+    def _publish_safe_attitude_setpoint(self, reason):
+        msg = VehicleAttitudeSetpoint()
+        msg.timestamp = self.timestamp_us
+
+        q_enu_to_ned = np.array([0.7071, 0, 0, 0.7071])
+        qi = self.qi[:, 0]
+        qi_norm = np.linalg.norm(qi)
+        if np.isfinite(qi_norm) and qi_norm > 1e-6:
+            q_current_enu = qi / qi_norm
+        else:
+            q_current_enu = np.array([1.0, 0.0, 0.0, 0.0])
+        q_current_ned = np.array(q_multiply(q_enu_to_ned, q_current_enu), dtype=np.float64)
+        msg.q_d = (q_current_ned / np.linalg.norm(q_current_ned)).tolist()
+
+        hover_thrust = self.m * self.g / self.max_thrust_newtons
+        msg.thrust_body = [0.0, 0.0, -max(0.15, min(hover_thrust, 0.8))]
+        self.publisher_vehicle_attitude_setpoint.publish(msg)
+
+        if self.offboard_count % max(1, int(1.0 / self.dt_ctrl)) == 0:
+            self.get_logger().warning(
+                f"Using safe attitude fallback at drone_{self.drone_idx}: {reason}"
+            )
+
+    def _record_qmpc_solve_time(self, solve_time_ms: float):
+        self.qmpc_solve_ms.append(float(solve_time_ms))
+        self.qmpc_solve_count += 1
+
+        if self.qmpc_solve_count % self.perf_report_window != 0:
+            return
+
+        samples = np.array(self.qmpc_solve_ms, dtype=np.float64)
+        mean_ms = float(np.mean(samples))
+        p95_ms = float(np.percentile(samples, 95))
+        p99_ms = float(np.percentile(samples, 99))
+        max_ms = float(np.max(samples))
+
+        current_hz = 1.0 / self.dt_ctrl
+        current_period_ms = self.dt_ctrl * 1000.0
+        est_ceiling_hz_p95 = 1000.0 / max(p95_ms, 1e-6)
+        est_ceiling_hz_p99 = 1000.0 / max(p99_ms, 1e-6)
+        util_p95 = p95_ms / current_period_ms
+
+        self.get_logger().info(
+            f"[perf] drone={self.drone_idx} mode={self.control_output_mode} "
+            f"solve_ms(mean/p95/p99/max)={mean_ms:.2f}/{p95_ms:.2f}/{p99_ms:.2f}/{max_ms:.2f}, "
+            f"current={current_hz:.2f}Hz, est_ceiling(p95/p99)={est_ceiling_hz_p95:.2f}/{est_ceiling_hz_p99:.2f}Hz, "
+            f"util_p95={util_p95:.2f}"
+        )
 
     def qmpc_publish_position(self):
         """Publish the desired position setpoint for the vehicle."""
@@ -1147,10 +1181,10 @@ class QuadNode(Node):
             self.ul_traj = np.array(msg.ul_traj, dtype=np.float32).reshape((self.horizon, self.nul))
 
         if (msg.time_traj > self.time_traj): # NOTE Update local REAL control variables
-            #### NOTE BUG Calculate slow, but use -1 in the horizon to apply position control, WORKING!!! #######
-            self.ui_ctrl = self.uq_traj[self.drone_idx][-1,:].reshape((self.nui,1)) # opt control -> thrust
-            self.xi_ctrl = self.xq_traj[self.drone_idx][-1,:].reshape((self.nxi,1)) # opt state -> quaternion
-            #########################################################################
+            # Use the first control/state of the horizon (standard MPC)
+            self.ui_ctrl = self.uq_traj[self.drone_idx][0,:].reshape((self.nui,1)) # opt control -> thrust
+            self.xi_ctrl = self.xq_traj[self.drone_idx][0,:].reshape((self.nxi,1)) # opt state -> quaternion
+            self.mpc_ctrl_ready = True
 
             self.time_traj = msg.time_traj
             # Update reference trajectory

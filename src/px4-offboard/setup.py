@@ -1,13 +1,13 @@
 import os
 from glob import glob
-from setuptools import setup
+from setuptools import find_packages, setup
 
 package_name = 'px4_offboard'
 
 setup(
     name=package_name,
     version='0.0.0',
-    packages=[package_name],
+    packages=find_packages(include=[package_name, f"{package_name}.*"]),
     data_files=[
         ('share/ament_index/resource_index/packages',
             ['resource/' + package_name]),
@@ -16,6 +16,8 @@ setup(
         ('share/' + package_name, ['package.xml']),
         (os.path.join('share', package_name, 'Reference_traj_fig8'),
          glob('px4_offboard/Reference_traj_fig8/*')),
+        (os.path.join('share', package_name, 'config'),
+         glob('px4_offboard/config/*.yaml')),
         (os.path.join('share', package_name, 'trained data (3quad_backup_best_learned_19)'),
          glob('px4_offboard/trained data (3quad_backup_best_learned_19)/*')),
         (os.path.join('share', package_name, 'trained data'),

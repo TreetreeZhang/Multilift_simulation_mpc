@@ -11,11 +11,16 @@ from numpy import linalg as LA
 import math
 from scipy.spatial.transform import Rotation as Rot
 from scipy import linalg as sLA
-# from multiprocessing import Pool
-# import multiprocessing
-# from pathos.multiprocessing import ProcessingPool as Pool
+import multiprocessing
+from multiprocessing import Pool
+try:
+    from pathos.multiprocessing import ProcessingPool as PathosPool
+except Exception:
+    PathosPool = None
 from acados_template import AcadosOcp, AcadosOcpSolver, AcadosModel
 from os import system
+import os
+import sys
 
 class Controller:
     """
@@ -644,19 +649,21 @@ class MPC:
             OCP_q[i].constraints.idxbu = np.array([i for i in range(self.n_ui)])
 
             ##-------set the solver--------##
-            # XXX: may use partial condensing later
-            # OCP_q[i].solver_options.qp_solver = 'PARTIAL_CONDENSING_HPIPM'
-            # Also need to test this method with SQP realtime
+            # 优化后的ACADOS求解器配置 - 优先速度
             OCP_q[i].solver_options.qp_solver = 'FULL_CONDENSING_QPOASES'
             OCP_q[i].solver_options.hessian_approx = 'GAUSS_NEWTON'
             OCP_q[i].solver_options.regularize_method = 'CONVEXIFY'
             OCP_q[i].solver_options.integrator_type = 'ERK'
-            OCP_q[i].solver_options.sim_method_num_stages = 4 # default 4, meaning 4-th order Runge Kutta
+            OCP_q[i].solver_options.sim_method_num_stages = 2
             OCP_q[i].solver_options.print_level = 0
-            OCP_q[i].solver_options.levenberg_marquardt = 1e-10 # small value for gauss newton method, large value for gradient descent method
-            # OCP_q[i].solver_options.nlp_solver_type = 'SQP_RTI' # SQP_RTI or SQP
-            OCP_q[i].solver_options.nlp_solver_type = 'SQP' # SQP FOR PARALLEL
-            # ocp.solver_options.nlp_solver_max_iter = 100
+            OCP_q[i].solver_options.levenberg_marquardt = 1e-8
+            OCP_q[i].solver_options.nlp_solver_type = 'SQP'
+            OCP_q[i].solver_options.qp_solver_cond_N = 2
+            OCP_q[i].solver_options.warm_start_first_qp = 1
+            OCP_q[i].solver_options.qp_warm_start = 1
+            OCP_q[i].solver_options.nlp_solver_max_iter = 30
+            OCP_q[i].solver_options.qp_solver_iter_max = 30
+            OCP_q[i].solver_options.tol = 1e-4
 
             ##-------set the code generation--------##
             # compile acados ocp
@@ -753,7 +760,8 @@ class MPC:
         # output
         opt_soli = {"xi_opt": statei_traj_opt,
                     "ui_opt": controli_traj_opt,
-                    "costatei_opt": costatei_traj_opt}
+                    "costatei_opt": costatei_traj_opt,
+                    "status": int(status)}
         
         return opt_soli
     
@@ -860,19 +868,21 @@ class MPC:
         OCP_q.constraints.idxbu = np.array([i for i in range(self.n_ui)])
 
         ##-------set the solver--------##
-        # XXX: may use partial condensing later
-        # OCP_q.solver_options.qp_solver = 'PARTIAL_CONDENSING
-        # Also need to test this method with SQP realtime
+        # 优化后的ACADOS求解器配置 - 提高求解速度
         OCP_q.solver_options.qp_solver = 'FULL_CONDENSING_QPOASES'
         OCP_q.solver_options.hessian_approx = 'GAUSS_NEWTON'
         OCP_q.solver_options.regularize_method = 'CONVEXIFY'
         OCP_q.solver_options.integrator_type = 'ERK'
-        OCP_q.solver_options.sim_method_num_stages = 4 # default 4, meaning 4-th order Runge Kutta
+        OCP_q.solver_options.sim_method_num_stages = 2
         OCP_q.solver_options.print_level = 0
-        OCP_q.solver_options.levenberg_marquardt = 1e-10 # small value for gauss newton method, large value for gradient descent method
-        OCP_q.solver_options.nlp_solver_type = 'SQP_RTI' # SQP_RTI or SQP
-        # OCP_q.solver_options.nlp_solver_type = 'SQP' # SQP FOR PARALLEL
-        # ocp.solver_options.nlp_solver_max_iter = 100
+        OCP_q.solver_options.levenberg_marquardt = 1e-8
+        OCP_q.solver_options.nlp_solver_type = 'SQP'
+        OCP_q.solver_options.qp_solver_cond_N = 2
+        OCP_q.solver_options.warm_start_first_qp = 1
+        OCP_q.solver_options.qp_warm_start = 1
+        OCP_q.solver_options.nlp_solver_max_iter = 50
+        OCP_q.solver_options.qp_solver_iter_max = 50
+        OCP_q.solver_options.tol = 1e-4
 
         ##-------set the code generation--------##
         # NOTE Multi process should build in different folders!!!
@@ -974,7 +984,8 @@ class MPC:
         # output
         opt_soli = {"xi_opt": statei_traj_opt,
                     "ui_opt": controli_traj_opt,
-                    "costatei_opt": costatei_traj_opt}
+                    "costatei_opt": costatei_traj_opt,
+                    "status": int(status)}
         
         return opt_soli
     
@@ -1215,12 +1226,16 @@ class MPC:
         ocpl.solver_options.hessian_approx = 'GAUSS_NEWTON'
         ocpl.solver_options.regularize_method = 'CONVEXIFY'
         ocpl.solver_options.integrator_type = 'ERK'
-        ocpl.solver_options.sim_method_num_stages = 4 # default 4
+        ocpl.solver_options.sim_method_num_stages = 2
         ocpl.solver_options.print_level = 0
-        ocpl.solver_options.levenberg_marquardt = 1e-10 # small value for gauss newton method, large value for gradient descent method
-        # ocpl.solver_options.nlp_solver_type ='SQP_RTI' # SQP_RTI or SQP
-        ocpl.solver_options.nlp_solver_type ='SQP' # SQP FOR PARALLEL
-        # ocpl.solver_options.nlp_solver_max_iter = 100
+        ocpl.solver_options.levenberg_marquardt = 1e-8
+        ocpl.solver_options.nlp_solver_type = 'SQP'
+        ocpl.solver_options.qp_solver_cond_N = 3
+        ocpl.solver_options.warm_start_first_qp = 1
+        ocpl.solver_options.qp_warm_start = 1
+        ocpl.solver_options.nlp_solver_max_iter = 30
+        ocpl.solver_options.qp_solver_iter_max = 30
+        ocpl.solver_options.tol = 1e-5
 
         ##-------set the code generation--------##
         # compile acados ocp
@@ -1233,9 +1248,9 @@ class MPC:
         # load solver from json file
         build_l = True
         generate_l = True
-        if gazebo_sim:      # XXX: may be a small bug for initialize in gazebo
-            build_i=False
-            generate_i=False
+        if gazebo_sim:
+            build_l = False
+            generate_l = False
         self.acados_solver_ql = AcadosOcpSolver(ocpl,generate=generate_l,build=build_l,json_file=json_file_l)
 
         ##--------compute Lagrangian multipliers from KKT conditions---------##

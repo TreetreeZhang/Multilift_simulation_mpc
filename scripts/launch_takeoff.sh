@@ -1,85 +1,145 @@
 #!/usr/bin/env bash
-set -eo pipefail
+set -e
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-SESSION="${MULTILIFT_TMUX_SESSION:-takeoff}"
 
 ROS_DISTRO="${ROS_DISTRO:-humble}"
 RMW_IMPLEMENTATION="${RMW_IMPLEMENTATION:-rmw_fastrtps_cpp}"
-ISAAC_ROS_WS="${ISAAC_ROS_WS:-$HOME/IsaacSim-ros_workspaces/build_ws/humble/humble_ws/install/local_setup.bash}"
-ISAAC_ROS_BRIDGE_LIB="${ISAAC_ROS_BRIDGE_LIB:-$HOME/.conda/envs/env_isaacsim/lib/python3.11/site-packages/isaacsim/exts/isaacsim.ros2.bridge/humble/lib}"
+ISAAC_ROS_WS="${ISAAC_ROS_WS:-/home/carlson/IsaacSim-ros_workspaces/build_ws/humble/humble_ws/install/local_setup.bash}"
+ISAAC_ROS_BRIDGE_LIB="${ISAAC_ROS_BRIDGE_LIB:-/home/carlson/.conda/envs/env_isaacsim/lib/python3.11/site-packages/isaacsim/exts/isaacsim.ros2.bridge/humble/lib}"
 SITL_SCRIPT="${SITL_SCRIPT:-$ROOT_DIR/src/sitl_sim/sitl_sim/sitl_stable.py}"
 ROS_LAUNCH_FILE="${ROS_LAUNCH_FILE:-multilift_mpc.launch.py}"
 
 usage() {
   cat <<'USAGE'
-Usage: scripts/launch_takeoff.sh [agent|sim|ros|all|help]
+Usage: ./scripts/launch_takeoff.sh [agent|sim|ros|cleanup|all|help]
 
 Commands:
-  agent   Start Micro XRCE-DDS Agent.
-  sim     Kill stale PX4 processes, then start Isaac Sim SITL.
-  ros     Source ROS2 workspace and launch the multilift MPC stack.
-  all     Start the three takeoff steps in one tmux session.
+  agent   Run Micro XRCE-DDS Agent.
+  sim     Run Isaac Sim SITL step from takeoff.md.
+  ros     Run ROS2 multilift launch step from takeoff.md.
+  cleanup Stop stale Micro XRCE, PX4, and multilift ROS processes.
+  all     Open three normal interactive terminal windows and run agent/sim/ros.
   help    Show this help.
 
-Environment overrides:
-  MULTILIFT_TMUX_SESSION, ISAACSIM_PYTHON, ISAAC_ROS_WS,
-  ISAAC_ROS_BRIDGE_LIB, SITL_SCRIPT, ROS_LAUNCH_FILE
+Notes:
+  This script intentionally uses normal interactive bash shells so aliases,
+  functions, and variables from your usual terminal are available.
 USAGE
 }
 
-deactivate_conda() {
-  conda deactivate 2>/dev/null || true
+cleanup_cmd() {
+  cat <<EOF
+cd "$ROOT_DIR"
+conda deactivate || true
+pkill -f MicroXRCEAgent || true
+pkill -f px4 || true
+pkill -f multilift_sync_node || true
+pkill -f multilift_quad_node || true
+pkill -f visualizer || true
+pkill -f "ros2 launch px4_offboard" || true
+EOF
 }
 
-export_ros_env() {
-  export ROS_DISTRO
-  export RMW_IMPLEMENTATION
-  export LD_LIBRARY_PATH="${LD_LIBRARY_PATH:-}:$ISAAC_ROS_BRIDGE_LIB"
+agent_cmd() {
+  cat <<EOF
+cd "$ROOT_DIR"
+conda deactivate || true
+MicroXRCEAgent udp4 -p 8888
+EOF
 }
 
-run_agent() {
-  deactivate_conda
-  MicroXRCEAgent udp4 -p 8888
+sim_cmd() {
+  cat <<EOF
+cd "$ROOT_DIR"
+conda deactivate || true
+export ROS_DISTRO=$ROS_DISTRO
+export RMW_IMPLEMENTATION=$RMW_IMPLEMENTATION
+export LD_LIBRARY_PATH="\$LD_LIBRARY_PATH:$ISAAC_ROS_BRIDGE_LIB"
+source "$ISAAC_ROS_WS"
+ISAACSIM_PYTHON "$SITL_SCRIPT"
+EOF
 }
 
-run_sim() {
-  deactivate_conda
-  pkill -f px4 || true
-  export_ros_env
-  source "$ISAAC_ROS_WS"
-  "${ISAACSIM_PYTHON:?ISAACSIM_PYTHON is not set}" "$SITL_SCRIPT"
+ros_cmd() {
+  cat <<EOF
+cd "$ROOT_DIR"
+conda deactivate || true
+source /opt/ros/$ROS_DISTRO/setup.bash
+source "$ROOT_DIR/install/local_setup.bash"
+ros2 launch px4_offboard "$ROS_LAUNCH_FILE"
+EOF
 }
 
-run_ros() {
-  deactivate_conda
-  export_ros_env
-  source "/opt/ros/$ROS_DISTRO/setup.bash"
-  source "$ROOT_DIR/install/local_setup.bash"
-  ros2 launch px4_offboard "$ROS_LAUNCH_FILE"
+run_interactive() {
+  local step="$1"
+  local cmd
+
+  case "$step" in
+    cleanup) cmd="$(cleanup_cmd)" ;;
+    agent) cmd="$(agent_cmd)" ;;
+    sim) cmd="$(sim_cmd)" ;;
+    ros) cmd="$(ros_cmd)" ;;
+    *) usage; exit 2 ;;
+  esac
+
+  bash -ic "$cmd"
+}
+
+terminal_run_command() {
+  local step="$1"
+  local cmd
+
+  case "$step" in
+    cleanup) cmd="$(cleanup_cmd)" ;;
+    agent) cmd="$(agent_cmd)" ;;
+    sim) cmd="$(sim_cmd)" ;;
+    ros) cmd="$(ros_cmd)" ;;
+    *) usage; exit 2 ;;
+  esac
+
+  printf '%s\nstatus=$?\necho\necho "[multilift] %s exited with status ${status}"\nexec bash -i\n' "$cmd" "$step"
+}
+
+open_terminal() {
+  local title="$1"
+  local step="$2"
+  local cmd
+  cmd="$(terminal_run_command "$step")"
+
+  if command -v gnome-terminal >/dev/null 2>&1; then
+    gnome-terminal --title "$title" -- bash -ic "$cmd"
+  elif command -v x-terminal-emulator >/dev/null 2>&1; then
+    x-terminal-emulator -T "$title" -e bash -ic "$cmd"
+  elif command -v konsole >/dev/null 2>&1; then
+    konsole --new-tab --title "$title" -e bash -ic "$cmd"
+  elif command -v xfce4-terminal >/dev/null 2>&1; then
+    xfce4-terminal --title "$title" --command "bash -ic '$cmd'"
+  else
+    echo "No supported terminal emulator found. Run these manually:"
+    echo "  ./scripts/launch_takeoff.sh agent"
+    echo "  ./scripts/launch_takeoff.sh sim"
+    echo "  ./scripts/launch_takeoff.sh ros"
+    exit 1
+  fi
 }
 
 run_all() {
-  command -v tmux >/dev/null
-  tmux kill-session -t "$SESSION" 2>/dev/null || true
-  tmux new -d -s "$SESSION" -n takeoff \
-    "bash -lc '\"$ROOT_DIR/scripts/launch_takeoff.sh\" agent'"
-  tmux split-window -h -t "$SESSION":0 \
-    "bash -lc '\"$ROOT_DIR/scripts/launch_takeoff.sh\" sim'"
-  tmux split-window -v -t "$SESSION":0.0 \
-    "bash -lc '\"$ROOT_DIR/scripts/launch_takeoff.sh\" ros'"
-  tmux select-layout -t "$SESSION":0 tiled
-  tmux attach -t "$SESSION"
+  run_interactive cleanup
+  sleep 0.5
+  open_terminal "multilift-agent" agent
+  sleep "${START_SIM_DELAY:-1}"
+  open_terminal "multilift-sim" sim
+  sleep "${START_ROS_DELAY:-1}"
+  open_terminal "multilift-ros" ros
 }
 
 case "${1:-all}" in
-  agent) run_agent ;;
-  sim) run_sim ;;
-  ros) run_ros ;;
+  cleanup) run_interactive cleanup ;;
+  agent) run_interactive agent ;;
+  sim) run_interactive sim ;;
+  ros) run_interactive ros ;;
   all) run_all ;;
   help|-h|--help) usage ;;
-  *)
-    usage
-    exit 2
-    ;;
+  *) usage; exit 2 ;;
 esac

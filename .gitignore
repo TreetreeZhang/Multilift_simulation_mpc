@@ -16,6 +16,24 @@ __pycache__/
 *.pyo
 *.pyd
 
+# Data / artifacts (keep .gitkeep)
+data/**
+!data/**/.gitkeep
+
+# Common experiment outputs
+*.npy
+*.npz
+*.pt
+*.pth
+*.png
+*.csv
+
+# Project-specific generated assets
+src/px4-offboard/px4_offboard/Reference_traj_circle/
+src/px4-offboard/px4_offboard/Reference_traj_fig8/
+src/px4-offboard/px4_offboard/Evaluation results*/
+src/px4-offboard/px4_offboard/trained data*/
+
 # Ignore auto-generated files related to ROS 2
 ros2_ws/.colcon/
 ros2_ws/.vscode/
@@ -41,5 +59,4 @@ ros2_ws/.vscode/
 # Ignore ROS 1 related files (if any)
 devel/
 .DS_Store
-.gitignore
 .codex

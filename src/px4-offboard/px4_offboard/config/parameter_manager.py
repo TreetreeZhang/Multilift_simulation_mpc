@@ -79,7 +79,11 @@ class ControlParameters:
     dt_ctrl: float = 0.05
     dt_broadcast: float = 0.02
     horizon: int = 10
+    horizon_loss: int = 20
     angle_t: float = np.pi / 9
+    altitude: float = 5.0
+    gamma: float = 1e-4
+    gamma2: float = 1e-15
 
 
 @dataclass

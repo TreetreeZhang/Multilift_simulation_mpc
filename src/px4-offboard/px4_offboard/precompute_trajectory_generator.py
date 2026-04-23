@@ -17,13 +17,13 @@ except Exception:
     get_package_share_directory = None
 
 try:
-    from .Dynamics import multilifting
+    from .dynamics import multilifting
     from .config.parameter_manager import ParameterManager
-    from . import Robust_Flight_MPC_acados
+    from .control import Controller
 except ImportError:
-    from Dynamics import multilifting
+    from dynamics import multilifting
     from config.parameter_manager import ParameterManager
-    import Robust_Flight_MPC_acados
+    from control import Controller
 
 
 class PrecomputedTrajectoryGenerator:
@@ -116,7 +116,7 @@ class PrecomputedTrajectoryGenerator:
 
         self.stm = multilifting(uav_para, load_para, cable_para, self.dt_ctrl)
         self.stm.model()
-        self.geo_ctrl = Robust_Flight_MPC_acados.Controller(uav_para, self.dt_ctrl)
+        self.geo_ctrl = Controller(uav_para, self.dt_ctrl)
 
         # 加载轨迹系数
         self._load_trajectory_coefficients()

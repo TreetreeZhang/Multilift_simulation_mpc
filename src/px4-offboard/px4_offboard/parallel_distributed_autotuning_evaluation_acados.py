@@ -10,9 +10,9 @@ Wang, Bingheng at Control and Simulation Lab, ECE Dept. NUS, Singapore
     "DiffTune-MPC: Closed-loop Learning for Model Predictive Control"
     arXiv preprint arXiv:2312.11384 (2023).
 """
-import Dynamics
+from px4_offboard.dynamics import multilifting
 import NeuralNet
-import Robust_Flight_MPC_acados
+from px4_offboard.control import Controller, MPC, MPC_gradient, Sensitivity_propagation
 from casadi import *
 import numpy as np
 from numpy import linalg as LA
@@ -27,7 +27,7 @@ from sklearn.metrics import root_mean_squared_error
 from scipy.spatial.transform import Rotation as Rot
 from joblib import Parallel, delayed
 from multiprocessing import Process, Array, Manager, shared_memory
-from PrecomputedTrajectoryManager import PrecomputedTrajectoryManager
+from px4_offboard.trajectory import PrecomputedTrajectoryManager
 
 _PRECOMP_MANAGER = None
 
@@ -58,7 +58,7 @@ rg           = np.array([[0.1, 0.1, -0.1]]).T # coordinate of the payload's CoM 
 dt_sample    = 5e-3 # used in the 'step' function for simulating the environment
 dt_ctrl      = 2e-2 # for control, 50Hz
 ratio        = int(dt_ctrl/dt_sample)
-stm          = Dynamics.multilifting(uav_para, load_para, cable_para, dt_ctrl)
+stm          = multilifting(uav_para, load_para, cable_para, dt_ctrl)
 stm.model()
 horizon      = 8 # MPC's horizon
 horizon_loss = 20 # horizon of the high-level loss for training, which can be longer than the MPC's horizon
@@ -88,8 +88,8 @@ nlp        = len(loadp)
 """--------------------------------------Define controller--------------------------------------------------"""
 gamma      = 1e-4 # barrier parameter, cannot be too small
 gamma2     = 1e-15
-GeoCtrl    = Robust_Flight_MPC_acados.Controller(uav_para, dt_ctrl)
-DistMPC    = Robust_Flight_MPC_acados.MPC(uav_para, load_para, cable_para, dt_ctrl, horizon, gamma, gamma2)
+GeoCtrl    = Controller(uav_para, dt_ctrl)
+DistMPC    = MPC(uav_para, load_para, cable_para, dt_ctrl, horizon, gamma, gamma2)
 DistMPC.SetStateVariable(stm.xi,stm.xq,stm.xl,stm.index_q)
 DistMPC.SetCtrlVariable(stm.ui,stm.ul,stm.ti)
 DistMPC.SetLoadParameter(stm.Jldiag,stm.rg)
@@ -108,15 +108,15 @@ Coeffx        = np.zeros((8,8))
 Coeffy        = np.zeros((8,8))
 Coeffz        = np.zeros((8,8))
 for k in range(8):
-    Coeffx[k,:] = np.load('Reference_traj_fig8/coeffxl_'+str(k+1)+'.npy')
-    Coeffy[k,:] = np.load('Reference_traj_fig8/coeffyl_'+str(k+1)+'.npy')
-    Coeffz[k,:] = np.load('Reference_traj_fig8/coeffzl_'+str(k+1)+'.npy')
-    # Coeffx[k,:] = np.load(os.path.join(package_share_directory, 'Reference_traj_fig8/coeffxl_'+str(k+1)+'.npy'))
-    # Coeffy[k,:] = np.load(os.path.join(package_share_directory, 'Reference_traj_fig8/coeffyl_'+str(k+1)+'.npy'))
-    # Coeffz[k,:] = np.load(os.path.join(package_share_directory, 'Reference_traj_fig8/coeffzl_'+str(k+1)+'.npy'))
+    Coeffx[k,:] = np.load('../../../data/reference_trajectories/Reference_traj_fig8/coeffxl_'+str(k+1)+'.npy')
+    Coeffy[k,:] = np.load('../../../data/reference_trajectories/Reference_traj_fig8/coeffyl_'+str(k+1)+'.npy')
+    Coeffz[k,:] = np.load('../../../data/reference_trajectories/Reference_traj_fig8/coeffzl_'+str(k+1)+'.npy')
+    # Coeffx[k,:] = np.load(os.path.join(package_share_directory, '../../../data/reference_trajectories/Reference_traj_fig8/coeffxl_'+str(k+1)+'.npy'))
+    # Coeffy[k,:] = np.load(os.path.join(package_share_directory, '../../../data/reference_trajectories/Reference_traj_fig8/coeffyl_'+str(k+1)+'.npy'))
+    # Coeffz[k,:] = np.load(os.path.join(package_share_directory, '../../../data/reference_trajectories/Reference_traj_fig8/coeffzl_'+str(k+1)+'.npy'))
 
 
-# coeffa = np.load('Reference_traj_circle/coeffa.npy')
+# coeffa = np.load('../../../data/reference_trajectories/Reference_traj_circle/coeffa.npy')
 def Reference_for_MPC(time_traj, angle_t):
     global _PRECOMP_MANAGER
     if _PRECOMP_MANAGER is None:
@@ -135,11 +135,11 @@ def Reference_for_MPC(time_traj, angle_t):
 
 
 """--------------------------------------Define MPC gradient------------------------------------------------"""
-MPCgrad    = Robust_Flight_MPC_acados.MPC_gradient(stm.xi,stm.xl,stm.ti,DistMPC.para_i,DistMPC.para_l,DistMPC.loadp,horizon)
+MPCgrad    = MPC_gradient(stm.xi,stm.xl,stm.ti,DistMPC.para_i,DistMPC.para_l,DistMPC.loadp,horizon)
 
 
 """--------------------------------------Define sensitivity propagation-------------------------------------"""
-Sensprop   = Robust_Flight_MPC_acados.Sensitivity_propagation(uav_para,stm.xi,stm.xl,stm.ul,
+Sensprop   = Sensitivity_propagation(uav_para,stm.xi,stm.xl,stm.ul,
                                                        DistMPC.para_i,DistMPC.para_l,DistMPC.loadp,horizon_loss,horizon)
 
 
@@ -681,8 +681,8 @@ def Distributed_forwardMPC_Parallel(xq_fb, xl_fb, xq_traj_prev, uq_traj_prev, xl
 def Evaluate(shared_mem_name, pool=None):
     T_end      = stm.Tc # total simulation duration
     N          = int(T_end/dt_sample) # total iterations
-    if not os.path.exists("Evaluation results_para"):
-        os.makedirs("Evaluation results_para")
+    if not os.path.exists("../../../data/evaluation_results/Evaluation results_para"):
+        os.makedirs("../../../data/evaluation_results/Evaluation results_para")
 
     # Lists for saving the Evaluation results_para
     Quad_State   = []
@@ -713,12 +713,12 @@ def Evaluate(shared_mem_name, pool=None):
     # Load the quadrotors' network models
     NN_Quad    = []
     for i in range(nq):
-        PATH_1 = "trained data (3quad_backup_best_learned_19)/trained_nn_quad_"+str(i)+".pt"
+        PATH_1 = "../../../data/trained_models/trained data (3quad_backup_best_learned_19)/trained_nn_quad_"+str(i)+".pt"
         # PATH_1 = os.path.join(package_share_directory, "trained data/trained_nn_quad_"+str(i)+".pt")
         nn_quad_i = torch.load(PATH_1)
         NN_Quad  += [nn_quad_i]
     # Load the payload's network model
-    PATHl_2 = "trained data (3quad_backup_best_learned_19)/trained_nn_load.pt"
+    PATHl_2 = "../../../data/trained_models/trained data (3quad_backup_best_learned_19)/trained_nn_load.pt"
     # PATHl_2 = os.path.join(package_share_directory, "trained data/trained_nn_load.pt")
     nn_load    = torch.load(PATHl_2)
     
@@ -963,15 +963,15 @@ def Evaluate(shared_mem_name, pool=None):
    
         
         # save the Evaluation results_para
-        np.save('Evaluation results_para/Quad_State_fig_8_6quad_'+str(mode),Quad_State)
-        np.save('Evaluation results_para/Quad_Control_fig_8_6quad_'+str(mode),Quad_Control)
-        np.save('Evaluation results_para/Load_State_fig_8_6quad_'+str(mode),Load_State)
-        np.save('Evaluation results_para/Tension_Load_Actual_fig_8_6quad_'+str(mode),Tension_Load_Actual)
-        np.save('Evaluation results_para/Tension_Load_MPC_fig_8_6quad_'+str(mode),Tension_Load_MPC)
-        np.save('Evaluation results_para/TIME',TIME)
-        np.save('Evaluation results_para/EULERl_fig_8_6quad_'+str(mode),EULER_l)
-        np.save('Evaluation results_para/Ref_Load_fig_8_6quad_'+str(mode),Ref_Load)
-        np.save('Evaluation results_para/Vl_fig_8_6quad_'+str(mode),Vl)
+        np.save('../../../data/evaluation_results/Evaluation results_para/Quad_State_fig_8_6quad_'+str(mode),Quad_State)
+        np.save('../../../data/evaluation_results/Evaluation results_para/Quad_Control_fig_8_6quad_'+str(mode),Quad_Control)
+        np.save('../../../data/evaluation_results/Evaluation results_para/Load_State_fig_8_6quad_'+str(mode),Load_State)
+        np.save('../../../data/evaluation_results/Evaluation results_para/Tension_Load_Actual_fig_8_6quad_'+str(mode),Tension_Load_Actual)
+        np.save('../../../data/evaluation_results/Evaluation results_para/Tension_Load_MPC_fig_8_6quad_'+str(mode),Tension_Load_MPC)
+        np.save('../../../data/evaluation_results/Evaluation results_para/TIME',TIME)
+        np.save('../../../data/evaluation_results/Evaluation results_para/EULERl_fig_8_6quad_'+str(mode),EULER_l)
+        np.save('../../../data/evaluation_results/Evaluation results_para/Ref_Load_fig_8_6quad_'+str(mode),Ref_Load)
+        np.save('../../../data/evaluation_results/Evaluation results_para/Vl_fig_8_6quad_'+str(mode),Vl)
         rmsex = format(root_mean_squared_error(STATE_l[0,:],REF_P_l[0,:]),'.3f')
         rmsey = format(root_mean_squared_error(STATE_l[1,:],REF_P_l[1,:]),'.3f')
         rmsez = format(root_mean_squared_error(STATE_l[2,:],REF_P_l[2,:]),'.3f')
@@ -980,7 +980,7 @@ def Evaluate(shared_mem_name, pool=None):
         rmseay = format(root_mean_squared_error(EULER_l[2,:],np.zeros((N)))*57.3,'.3f')
         print('rmsex=',rmsex,'rmsey=',rmsey,'rmsez=',rmsez,'rmseagr=',rmsear,'rmseap=',rmseap,'rmseay=',rmseay)
         rmse = np.array([rmsex,rmsey,rmsez,rmsear,rmseap,rmseay]) 
-        np.save('Evaluation results_para/Rmse_fig_8_6quad_'+str(mode),rmse)
+        np.save('../../../data/evaluation_results/Evaluation results_para/Rmse_fig_8_6quad_'+str(mode),rmse)
 
     taks_end_time = (TM.time() - task_start_time)*1000
     print("s:--- %s ms ---" % format(taks_end_time,'.2f'),'ctrlmode=',ctrlmode)
@@ -997,7 +997,7 @@ def Evaluate(shared_mem_name, pool=None):
     plt.ylabel('Actual tension force [N]')
     plt.legend(['Cable0', 'Cable1', 'Cable2', 'Cable3'])
     plt.grid()
-    plt.savefig('Evaluation results_para/cable_actual_tensions_fig_8_6quad_'+str(mode)+'.png',dpi=400)
+    plt.savefig('../../../data/evaluation_results/Evaluation results_para/cable_actual_tensions_fig_8_6quad_'+str(mode)+'.png',dpi=400)
     plt.show()
 
     plt.figure(3,dpi=400)
@@ -1010,7 +1010,7 @@ def Evaluate(shared_mem_name, pool=None):
     plt.ylabel('MPC tension force [N]')
     plt.legend(['Cable0', 'Cable1', 'Cable2', 'Cable3'])
     plt.grid()
-    plt.savefig('Evaluation results_para/cable_MPC_tensions_fig_8_6quad_'+str(mode)+'.png',dpi=400)
+    plt.savefig('../../../data/evaluation_results/Evaluation results_para/cable_MPC_tensions_fig_8_6quad_'+str(mode)+'.png',dpi=400)
     plt.show()
 
     plt.figure(4,dpi=400)
@@ -1021,7 +1021,7 @@ def Evaluate(shared_mem_name, pool=None):
     plt.ylabel('Payload attitude [deg]')
     plt.legend(['roll', 'pitch', 'yaw'])
     plt.grid()
-    plt.savefig('Evaluation results_para/payload_attitude_MPC_fig_8_6quad_'+str(mode)+'.png',dpi=400)
+    plt.savefig('../../../data/evaluation_results/Evaluation results_para/payload_attitude_MPC_fig_8_6quad_'+str(mode)+'.png',dpi=400)
     plt.show()
 
     fig, (ax1, ax2, ax3) = plt.subplots(3,sharex=True, dpi=400)
@@ -1057,7 +1057,7 @@ def Evaluate(shared_mem_name, pool=None):
     ax1.grid()
     ax2.grid()
     ax3.grid()
-    plt.savefig('Evaluation results_para/payload_position_MPC_fig_8_6quad_'+str(mode)+'.png',dpi=400)
+    plt.savefig('../../../data/evaluation_results/Evaluation results_para/payload_position_MPC_fig_8_6quad_'+str(mode)+'.png',dpi=400)
     plt.show()
 
     plt.figure(6,dpi=400)
@@ -1068,7 +1068,7 @@ def Evaluate(shared_mem_name, pool=None):
     plt.xlabel('x [m]')
     plt.ylabel('y [m]')
     plt.grid()
-    plt.savefig('Evaluation results_para/payload_3D_MPC_fig_8_6quad_'+str(mode)+'.png',dpi=400)
+    plt.savefig('../../../data/evaluation_results/Evaluation results_para/payload_3D_MPC_fig_8_6quad_'+str(mode)+'.png',dpi=400)
     plt.show()
 
 if __name__ == '__main__':

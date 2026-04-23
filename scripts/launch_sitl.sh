@@ -17,17 +17,19 @@ run_all() {
   command -v tmux >/dev/null
   tmux kill-session -t "$SESSION" 2>/dev/null || true
 
-  tmux new -d -s "$SESSION" -n sitl \
+  tf_pane="$(tmux new -d -s "$SESSION" -n sitl -P -F '#{pane_id}' \
     "bash -lc 'source \"$ROOT_DIR/install/setup.bash\" && ros2 run px4_tf tf_convert'"
-  tmux split-window -h -t "$SESSION":0 \
+  )"
+  agent_pane="$(tmux split-window -h -t "$tf_pane" -P -F '#{pane_id}' \
     "bash -lc 'source \"$ROOT_DIR/install/setup.bash\" && MicroXRCEAgent udp4 -p 8888'"
-  tmux split-window -v -t "$SESSION":0.0 \
+  )"
+  tmux split-window -v -t "$tf_pane" \
     "bash -lc 'source \"$ROOT_DIR/install/setup.bash\" && \"$ISAACSIM_PYTHON\" \"$ROOT_DIR/src/sitl_sim/sitl_sim/sitl_stable.py\"'"
-  tmux split-window -v -t "$SESSION":0.1 \
+  tmux split-window -v -t "$agent_pane" \
     "bash -lc 'source \"$ROOT_DIR/install/setup.bash\" && ros2 launch px4_offboard geom_multi.launch.py'"
 
-  tmux select-layout -t "$SESSION":0 tiled
-  tmux attach -t "$SESSION"
+  tmux select-layout -t "$SESSION":sitl tiled
+  tmux attach -t "$SESSION":sitl
 }
 
 case "${1:-all}" in

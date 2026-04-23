@@ -58,7 +58,7 @@ def generate_launch_description():
                     'altitude': 4.0,
                     # 'trajectory_type': 'hover'
 
-                    # FIXME: Just for single drone, cause collision for multiple drones
+                    # REVIEW: Just for single drone, cause collision for multiple drones
                     'trajectory_type': 'circle'
                     # 'trajectory_type': 'helix'
                     # 'trajectory_type': 'lemniscate'

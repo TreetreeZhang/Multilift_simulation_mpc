@@ -5,6 +5,7 @@ from rclpy.qos import QoSProfile, QoSReliabilityPolicy, QoSHistoryPolicy, QoSDur
 from rclpy.executors import MultiThreadedExecutor
 from rclpy.callback_groups import ReentrantCallbackGroup, MutuallyExclusiveCallbackGroup
 from px4_offboard.matrix_utils import hat, vee, deriv_unit_vector, saturate, R_to_q, q_multiply
+from px4_offboard.utils.ros_utils import load_multilift_ros_defaults
 from std_msgs.msg import Int64
 from mpc_msgs.msg import QuadReturnMPC, BroadcastMPC
 from mpc_msgs.srv import SyncMPC
@@ -23,10 +24,10 @@ import importlib.util
 import ament_index_python
 from numpy import linalg as LA
 import matplotlib.pyplot as plt
-from px4_offboard import Dynamics
+from px4_offboard.dynamics import multilifting
 from px4_offboard import NeuralNet
-from px4_offboard import Robust_Flight_MPC_acados
-from px4_offboard.PrecomputedTrajectoryManager import PrecomputedTrajectoryManager
+from px4_offboard.control import Controller, MPC
+from px4_offboard.trajectory import PrecomputedTrajectoryManager
 from scipy.spatial.transform import Rotation as Rot
 from multiprocessing import Process, Array, Manager
 
@@ -51,7 +52,7 @@ class QuadNode(Node):
         self._declare_ros_parameters()
 
         ## Initialize the AutoMultilift system ##
-        # HACK Parameters need to adjust according to the settings in Isaac Sim 
+        # Parameters are loaded from ROS2/YAML defaults.
         self._initialize_automultilift()
 
         ## Initialize precomputed trajectory manager ##
@@ -424,10 +425,10 @@ class QuadNode(Node):
         self.rg = np.array(self.get_parameter('rg').value).reshape(-1, 1)  # coordinate of the payload's CoM in {Bl}
         self.dt_ctrl = self.get_parameter('dt_ctrl').value
 
-        self.stm          = Dynamics.multilifting(self.uav_para, self.load_para, self.cable_para, self.dt_ctrl)
+        self.stm          = multilifting(self.uav_para, self.load_para, self.cable_para, self.dt_ctrl)
         self.stm.model()
-        self.horizon      = 10 # MPC's horizon
-        self.horizon_loss = 20 # horizon of the high-level loss for training, which can be longer than the MPC's horizon
+        self.horizon      = int(self.get_parameter('horizon').value) # MPC's horizon
+        self.horizon_loss = int(self.get_parameter('horizon_loss').value) # high-level loss horizon
         self.nxl          = self.stm.nxl # dimension of the payload's state
         self.nxi          = self.stm.nxi # dimension of the quadrotor's state
         self.nui          = self.stm.nui # dimension of the quadrotor's control 
@@ -450,12 +451,12 @@ class QuadNode(Node):
         self.nlp        = len(self.loadp)
 
         """--------------------------------------Define controller--------------------------------------------------"""
-        self.gamma      = 1e-4 # barrier parameter, cannot be too small
-        self.gamma2     = 1e-15
-        self.GeoCtrl    = Robust_Flight_MPC_acados.Controller(self.uav_para, self.dt_ctrl)
+        self.gamma      = self.get_parameter('gamma').value # barrier parameter
+        self.gamma2     = self.get_parameter('gamma2').value
+        self.GeoCtrl    = Controller(self.uav_para, self.dt_ctrl)
 
         # XXX DistMPC solver couple with stm
-        self.DistMPC    = Robust_Flight_MPC_acados.MPC(self.uav_para, self.load_para, self.cable_para, self.dt_ctrl, self.horizon, self.gamma, self.gamma2)
+        self.DistMPC    = MPC(self.uav_para, self.load_para, self.cable_para, self.dt_ctrl, self.horizon, self.gamma, self.gamma2)
         self.DistMPC.SetStateVariable(self.stm.xi,self.stm.xq,self.stm.xl,self.stm.index_q)
         self.DistMPC.SetCtrlVariable(self.stm.ui,self.stm.ul,self.stm.ti)
         self.DistMPC.SetLoadParameter(self.stm.Jldiag,self.stm.rg)
@@ -496,29 +497,30 @@ class QuadNode(Node):
 
     def _declare_ros_parameters(self):
         """Declare parameters for the node."""
-        self.declare_parameter('uav_para', [1.0, 0.02, 0.02, 0.04, 6.0, 0.2])
-        self.declare_parameter('load_para', [7.0, 1.0])
-        self.declare_parameter('cable_para', [1e9, 8e-6, 1e-2, 2.0]) # E=1 Gpa, A=7mm^2 (pi*1.5^2), c=10, L0=2, Nylon-HD
-        self.declare_parameter('Jl', [0.7 * x for x in [2.0, 2.0, 2.5]])  
-        self.declare_parameter('rg', [0.1, 0.1, -0.1]) 
-        self.declare_parameter('angle_t', np.pi / 9)
-
-        self.declare_parameter('drone_idx', 0)
-        self.declare_parameter('altitude', 5.0) 
-        self.declare_parameter('dt_ctrl', 5e-2)  
-        self.declare_parameter('dt_broadcast', 2e-2) 
-        self.declare_parameter('init_timestamp', None).value
+        defaults = load_multilift_ros_defaults(self.package_share_directory)
+        self.declare_parameter('uav_para', defaults['uav_para'])
+        self.declare_parameter('load_para', defaults['load_para'])
+        self.declare_parameter('cable_para', defaults['cable_para'])
+        self.declare_parameter('Jl', defaults['Jl'])
+        self.declare_parameter('rg', defaults['rg'])
+        self.declare_parameter('angle_t', defaults['angle_t'])
+        self.declare_parameter('drone_idx', defaults['drone_idx'])
+        self.declare_parameter('altitude', defaults['altitude'])
+        self.declare_parameter('dt_ctrl', defaults['dt_ctrl'])
+        self.declare_parameter('dt_broadcast', defaults['dt_broadcast'])
+        self.declare_parameter('horizon', defaults['horizon'])
+        self.declare_parameter('horizon_loss', defaults['horizon_loss'])
+        self.declare_parameter('gamma', defaults['gamma'])
+        self.declare_parameter('gamma2', defaults['gamma2'])
+        self.declare_parameter('trajectory_type', defaults['trajectory_type'])
+        self.declare_parameter('init_timestamp', None)
         self.dt_broadcast = self.get_parameter('dt_broadcast').value
         self.altitude = self.get_parameter('altitude').value
-
         self.drone_idx = self.get_parameter('drone_idx').value
         self.prefix = '' if self.drone_idx == 0 else f'/px4_{self.drone_idx}'
-
         self.init_timestamp = self.get_parameter('init_timestamp').value
-        if self.init_timestamp is None:
-            self.get_logger().error("Initial timestamp is not available, check the parameter.")
-            raise ValueError("Initial timestamp is not available, check the parameter.")
-    
+        self.trajectory_type = self.get_parameter('trajectory_type').value
+
     def _initialize_neural_network(self):
         """Initialize the neural network and load the model."""
         self.pmin, self.pmax = 0.01, 100 # lower and upper bounds of the weightings
@@ -567,7 +569,7 @@ class QuadNode(Node):
         self.u_prev       = np.array([[self.uav_para[0]*9.81,0,0,0]]).T
         self.z_hat        = np.zeros((3,1))
 
-        # HACK Service msg variables
+        # Service msg variables
         self.MPC_TRAJ              = False # QNode state transition flag
         # self.MPC_TRAJ              = True # QNode state transition flag
         # NOTE: Initial from the CentralNode and compare with msg.time_traj
@@ -956,7 +958,7 @@ class QuadNode(Node):
             self.b1d = np.array([0.0, 1.0, 0.0])
 
     # --- Publisher Functions ---
-    # FIXME Thrust + Attitude or Thrust + Torque, CHECK HERE
+    # REVIEW Thrust + Attitude or Thrust + Torque, CHECK HERE
     def qmpc_publish_command(self):
         """
         Actual control logic for the QNode. Robostify by L1-AC.
@@ -964,7 +966,7 @@ class QuadNode(Node):
         -> Normalized Thrust + desired attitude setpoint,
         -> publish VehicleAttitudeSetpoint msgs
         """
-        # # FIXME 1. Check the logic here! L1-AC robustify ui_ctrl[0,0], thrust
+        # # REVIEW 1. Check the logic here! L1-AC robustify ui_ctrl[0,0], thrust
         # xi       = self.xi # REAL_TIME quadrotor's state
         # z_hat    = self.z_hat
         # dm_hat, dum_hat, A_s = self.GeoCtrl.L1_adaptive_law(xi, z_hat)
@@ -982,7 +984,7 @@ class QuadNode(Node):
         # z_hatnew = self.stm.predictor_L1(z_hat, xi, ui, self.xl, ti, dm_hat, dum_hat, A_s, self.drone_idx, self.dt_ctrl)
         # self.z_hat = z_hatnew
 
-        # FIXME 2. Use the current xi_ctrl, ui_ctrl (update from CentralNode) to apply Attitude setpoint and thrust control
+        # REVIEW 2. Use the current xi_ctrl, ui_ctrl (update from CentralNode) to apply Attitude setpoint and thrust control
         msg = VehicleAttitudeSetpoint()
         msg.timestamp = self.timestamp_us
 

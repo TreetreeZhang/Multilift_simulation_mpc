@@ -5,15 +5,15 @@ from typing import Tuple, List
 import numpy as np
 
 from ..config.parameter_manager import ParameterManager
-from ..Dynamics import multilifting
-from ..Robust_Flight_MPC_acados import MPC
+from ..dynamics import multilifting
+from ..control import MPC
 
 
 class AcadosMPCSolver:
     """
     acados 求解器封装
     - 每个 worker 拥有独立的 AcadosOcpSolver 实例
-    - 使用 Robust_Flight_MPC_acados.MPC 的 ROS2 acados 入口
+    - Use the shared control.MPC ROS2 acados entry point
     """
 
     def __init__(self, agent_index: int, config_path: str | None = None, num_agents: int | None = None):
